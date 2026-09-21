@@ -1,0 +1,379 @@
+/**
+ * Axios instance configuration
+ * Creates and configures axios instances for HTTP requests
+ */
+
+import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse, AxiosError, InternalAxiosRequestConfig } from 'axios';
+import FormData from 'form-data';
+import https from 'https';
+import { URL } from 'url';
+import type { NetworkLogEntry } from '@bruno-types';
+import { getCookieStringForUrl, saveCookies } from '../../utils/cookies';
+import { preferencesUtil } from '../../store/preferences';
+import { safeStringifyJSON } from '../../utils/common';
+import { MultipartField, createFormData, formatMultipartData } from '../../utils/form-data';
+import { createConnectionLoggingTransport, sslValidationMessage } from './connection-log';
+import type { CACertificatesCount } from './cert-utils';
+
+// Import digest auth helper using require due to type declaration issues in @usebruno/requests
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { addDigestInterceptor } = require('@usebruno/requests') as {
+  addDigestInterceptor: (axiosInstance: AxiosInstance, request: { digestConfig: { username?: string; password?: string } }) => void;
+};
+
+const redirectResponseCodes = [301, 302, 303, 307, 308];
+
+/** Set per hop, so a redirect chain times each request. */
+type TimedRequestConfig = InternalAxiosRequestConfig & { metadata?: { startTime: number } };
+
+const getHttpVersion = (response: AxiosResponse): string | undefined =>
+  (response.request as { res?: { httpVersion?: string } } | undefined)?.res?.httpVersion;
+
+const getElapsedMs = (config?: AxiosRequestConfig): number => {
+  const startTime = (config as TimedRequestConfig | undefined)?.metadata?.startTime;
+  return startTime ? Date.now() - startTime : 0;
+};
+
+/** Error properties are non-enumerable, so JSON.stringify renders an Error as `{}`. */
+const describeError = (value: unknown): string | undefined => {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    return value.map(describeError).filter(Boolean).join('\n') || undefined;
+  }
+  return value instanceof Error ? value.message : safeStringifyJSON(value);
+};
+
+const stringifyRequestBody = (config: AxiosRequestConfig): string | undefined => {
+  const data = config.data;
+  if (data === undefined || data === null || data === '') {
+    return undefined;
+  }
+  if (typeof data === 'string') {
+    return data;
+  }
+  // A buffer body is a file upload; keep the file itself out of the log.
+  if (Buffer.isBuffer(data)) {
+    return '<request body redacted>';
+  }
+  if (data instanceof FormData) {
+    // Not parseDataFromRequest: it deep-clones what it is given, file buffers included.
+    const fields = (config as { _originalMultipartData?: MultipartField[] })._originalMultipartData;
+    return fields?.length ? formatMultipartData(fields, (data as { _boundary?: string })._boundary || 'boundary') : undefined;
+  }
+  if (typeof (data as { pipe?: unknown }).pipe === 'function') {
+    return undefined;
+  }
+  return safeStringifyJSON(data, 2);
+};
+
+interface AxiosInstanceOptions {
+  timeout?: number;
+  maxBodyLength?: number;
+  maxContentLength?: number;
+  httpsAgentOptions?: https.AgentOptions;
+  proxyMode?: 'off' | 'on' | 'system';
+  proxyConfig?: {
+    protocol?: string;
+    hostname?: string;
+    port?: number;
+    auth?: {
+      username?: string;
+      password?: string;
+    };
+  };
+  requestMaxRedirects?: number;
+  digestConfig?: {
+    username?: string;
+    password?: string;
+  };
+  collectionPath?: string;
+  disableCookies?: boolean;
+  timeline?: NetworkLogEntry[];
+}
+
+const createAxiosInstance = (options: AxiosInstanceOptions = {}): AxiosInstance => {
+  const {
+    timeout = 0,
+    maxBodyLength = Infinity,
+    maxContentLength = Infinity,
+    httpsAgentOptions = {},
+    proxyMode = 'off',
+    proxyConfig,
+    requestMaxRedirects = 5,
+    digestConfig,
+    collectionPath,
+    disableCookies,
+    timeline
+  } = options;
+
+  const { ca, cert, key, pfx, passphrase, rejectUnauthorized, caCertificatesCount, ...restAgentOptions } = httpsAgentOptions as Record<string, unknown>;
+
+  // TODO: Properly handle certificates. VS Code's @vscode/proxy-agent patches
+  // https.request and overrides agent TLS settings. As a workaround, we disable
+  // TLS verification at the process level for now.
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
+  const agentOpts: https.AgentOptions = {
+    keepAlive: true,
+    rejectUnauthorized: false,
+    ...(cert !== undefined && { cert: cert as string | Buffer }),
+    ...(key !== undefined && { key: key as string | Buffer }),
+    ...(pfx !== undefined && { pfx: pfx as string | Buffer }),
+    ...(passphrase !== undefined && { passphrase: passphrase as string }),
+  };
+
+  const config: AxiosRequestConfig = {
+    timeout,
+    maxBodyLength,
+    maxContentLength,
+    maxRedirects: 0,
+    responseType: 'stream',
+    proxy: false,
+    httpsAgent: new https.Agent(agentOpts),
+    headers: {
+      'User-Agent': 'bruno-runtime/1.0',
+      // VS Code's proxy agent drops the agent above, and Node's global agent sends `Connection: close`.
+      Connection: 'keep-alive'
+    }
+  };
+
+  if (proxyMode === 'on' && proxyConfig) {
+    config.proxy = {
+      protocol: proxyConfig.protocol || 'http',
+      host: proxyConfig.hostname || 'localhost',
+      port: proxyConfig.port || 8080,
+      auth: proxyConfig.auth ? {
+        username: proxyConfig.auth.username || '',
+        password: proxyConfig.auth.password || ''
+      } : undefined
+    };
+  } else if (proxyMode === 'system') {
+    delete config.proxy;
+  }
+
+  const instance = axios.create(config);
+
+  const log = (type: NetworkLogEntry['type'], message?: string): void => {
+    timeline?.push({ timestamp: new Date(), type, message });
+  };
+
+  const logResponseHeaders = (headers: Record<string, unknown>, elapsedMs: number): void => {
+    Object.entries(headers || {}).forEach(([name, value]) => {
+      log('responseHeader', `${name}: ${value}`);
+    });
+    log('responseHeader', `request-duration: ${elapsedMs}`);
+  };
+
+  const proxyModeMessage = proxyMode === 'on' && proxyConfig
+    ? `Proxy mode: on | ${proxyConfig.protocol || 'http'}://${proxyConfig.hostname}${proxyConfig.port ? `:${proxyConfig.port}` : ''}`
+    : `Proxy mode: ${proxyMode}`;
+
+  const shouldSendCookies = () => !disableCookies && preferencesUtil.shouldSendCookies();
+  const shouldStoreCookies = () => !disableCookies && preferencesUtil.shouldStoreCookies();
+
+  const connectionLoggingTransport = createConnectionLoggingTransport({
+    log,
+    timeout,
+    rejectUnauthorized: agentOpts.rejectUnauthorized,
+    caCertificatesCount: caCertificatesCount as Partial<CACertificatesCount> | undefined,
+    proxyModeMessage
+  });
+
+  instance.interceptors.request.use((requestConfig: InternalAxiosRequestConfig) => {
+    const startTime = Date.now();
+    (requestConfig as TimedRequestConfig).metadata = { startTime };
+    requestConfig.headers['request-start-time'] = startTime;
+
+    if (!timeline) {
+      return requestConfig;
+    }
+
+    log('separator');
+    log('info', `Preparing request to ${requestConfig.url}`);
+    log('info', `Current time is ${new Date().toISOString()}`);
+    log('request', `${(requestConfig.method || 'get').toUpperCase()} ${requestConfig.url}`);
+
+    const requestBody = stringifyRequestBody(requestConfig);
+    if (requestBody) {
+      log('requestData', requestBody);
+    }
+
+    // Headers and the proxy line are logged from the request the transport creates, where the wire set is complete.
+    requestConfig.transport = connectionLoggingTransport;
+
+    return requestConfig;
+  });
+
+  let redirectCount = 0;
+
+  instance.interceptors.response.use(
+    (response: AxiosResponse) => {
+      const elapsedMs = getElapsedMs(response.config);
+      const httpVersion = getHttpVersion(response);
+      if (httpVersion?.startsWith('2')) {
+        log('info', 'Using HTTP/2, server supports multiplexing');
+      }
+      log('response', `HTTP/${httpVersion || '1.1'} ${response.status} ${response.statusText}`);
+      logResponseHeaders(response.headers as unknown as Record<string, unknown>, elapsedMs);
+      log('info', `Request completed in ${elapsedMs} ms`);
+
+      if (response.config.url && shouldStoreCookies()) {
+        saveCookies(response.config.url, response.headers as Record<string, string | string[]>);
+      }
+
+      redirectCount = 0;
+
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers['location'];
+        if (location) {
+          (response as unknown as { redirectLocation: string }).redirectLocation = location;
+        }
+      }
+      return response;
+    },
+    async (error: AxiosError) => {
+      const originalRequest = error.config as InternalAxiosRequestConfig & {
+        _retry?: boolean;
+        _originalMultipartData?: unknown;
+        collectionPath?: string;
+      };
+
+      const elapsedMs = getElapsedMs(error.config);
+
+      log('error', 'there was an error executing the request!');
+
+      if (error.response) {
+        const httpVersion = getHttpVersion(error.response);
+        log('response', `HTTP/${httpVersion || '1.1'} ${error.response.status} ${error.response.statusText}`);
+        logResponseHeaders(error.response.headers as unknown as Record<string, unknown>, elapsedMs);
+      } else {
+        const cause = describeError(error.cause);
+        if (cause) {
+          log('error', cause);
+        }
+        const aggregatedErrors = describeError((error as { errors?: unknown }).errors);
+        if (aggregatedErrors) {
+          log('error', aggregatedErrors);
+        }
+      }
+
+      if (!originalRequest) {
+        return Promise.reject(error);
+      }
+
+      if (error.response && redirectResponseCodes.includes(error.response.status)) {
+        log('info', `Request completed in ${elapsedMs} ms`);
+
+        if (originalRequest.url && shouldStoreCookies()) {
+          saveCookies(originalRequest.url, error.response.headers as Record<string, string | string[]>);
+        }
+
+        if (redirectCount >= requestMaxRedirects) {
+          redirectCount = 0;
+          return Promise.reject(error);
+        }
+
+        redirectCount++;
+
+        const locationHeader = error.response.headers['location'];
+        if (!locationHeader) {
+          return Promise.reject(error);
+        }
+
+        let redirectUrl = locationHeader;
+        if (!locationHeader.match(/^https?:\/\//i)) {
+          try {
+            redirectUrl = new URL(locationHeader, originalRequest.url).toString();
+          } catch {
+            redirectUrl = locationHeader;
+          }
+          log('info', `Resolving relative redirect URL: ${locationHeader} → ${redirectUrl}`);
+        }
+
+        const requestConfig: AxiosRequestConfig = {
+          ...originalRequest,
+          url: redirectUrl,
+          headers: { ...originalRequest.headers }
+        };
+
+        const statusCode = error.response.status;
+        const originalMethod = (originalRequest.method || 'get').toLowerCase();
+
+        if ([301, 302, 303].includes(statusCode) && originalMethod !== 'head') {
+          requestConfig.method = 'get';
+          requestConfig.data = undefined;
+          if (requestConfig.headers) {
+            delete requestConfig.headers['content-length'];
+            delete requestConfig.headers['Content-Length'];
+            delete requestConfig.headers['content-type'];
+            delete requestConfig.headers['Content-Type'];
+          }
+          log('info', `Changed method from ${originalMethod.toUpperCase()} to GET for ${statusCode} redirect and removed request body`);
+        } else {
+          if (requestConfig.data && typeof requestConfig.data === 'object' &&
+              requestConfig.data.constructor && requestConfig.data.constructor.name === 'FormData') {
+            const formData = requestConfig.data as { _released?: boolean; _streams?: unknown[] };
+            if (formData._released || (formData._streams && formData._streams.length === 0)) {
+              if (originalRequest._originalMultipartData && (originalRequest.collectionPath || collectionPath)) {
+                log('info', `Recreating consumed FormData for ${statusCode} redirect`);
+                const recreatedForm = createFormData(
+                  originalRequest._originalMultipartData as Array<{ name: string; type: string; value: string; contentType?: string }>,
+                  originalRequest.collectionPath || collectionPath || ''
+                );
+                requestConfig.data = recreatedForm;
+                const formHeaders = recreatedForm.getHeaders();
+                Object.assign(requestConfig.headers || {}, formHeaders);
+              } else {
+                log('info', `FormData consumed but no original data available for ${statusCode} redirect`);
+              }
+            }
+          }
+        }
+
+        if (shouldSendCookies()) {
+          const cookieString = getCookieStringForUrl(redirectUrl);
+          if (cookieString && requestConfig.headers) {
+            requestConfig.headers['cookie'] = cookieString;
+          }
+        }
+
+        // Repeated once more by the transport, as the desktop app does for every hop.
+        log('info', proxyModeMessage);
+        if (/^https:/i.test(redirectUrl)) {
+          log('info', sslValidationMessage(agentOpts.rejectUnauthorized));
+        }
+
+        return instance(requestConfig);
+      }
+
+      return Promise.reject(error);
+    }
+  );
+
+  // Registered last so the challenge is logged as its own hop before this retries.
+  if (digestConfig && digestConfig.username && digestConfig.password) {
+    addDigestInterceptor(instance, { digestConfig });
+  }
+
+  return instance;
+};
+
+/**
+ * Make a request using a fresh axios instance
+ */
+const makeRequest = async (
+  config: AxiosRequestConfig,
+  instanceOptions: AxiosInstanceOptions = {}
+): Promise<AxiosResponse> => {
+  const instance = createAxiosInstance(instanceOptions);
+  return instance.request(config);
+};
+
+export default createAxiosInstance;
+export {
+  createAxiosInstance,
+  makeRequest,
+  AxiosInstanceOptions
+};

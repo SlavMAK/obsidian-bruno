@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "module": "commonjs",
+    "target": "ES2021",
+    "lib": ["ES2021", "DOM"],
+    "types": ["node"],
+    "typeRoots": ["./node_modules/@types", "./src/extension/types"],
+    "paths": {
+      "@bruno-types": ["src/bruno-types"],
+      "@bruno-types/*": ["src/bruno-types/*"],
+      "vscode": ["src/obsidian/vscode-shim.ts"],
+      "@usebruno/common/utils": ["node_modules/@usebruno/common/dist/utils/index.d.ts"],
+      "@usebruno/common/runner": ["node_modules/@usebruno/common/dist/runner/index.d.ts"]
+    }
+  },
+  "include": ["src/obsidian/**/*", "src/extension/**/*", "src/bruno-types/**/*"],
+  "exclude": ["node_modules", "src/webview", "**/*.spec.ts"]
+}

@@ -1,0 +1,19 @@
+import type { UID, BrunoVariableDataType } from '../common';
+
+export interface EnvironmentVariable {
+  uid: UID;
+  name?: string | null;
+  value?: string | number | boolean | Record<string, unknown> | null;
+  type: 'text';
+  enabled?: boolean;
+  secret?: boolean;
+  dataType?: BrunoVariableDataType;
+}
+
+export interface Environment {
+  uid: UID;
+  name: string;
+  variables: EnvironmentVariable[];
+}
+
+export type Environments = Environment[];

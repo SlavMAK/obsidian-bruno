@@ -1,0 +1,26 @@
+.bruno-view-content {
+  padding: 0;
+}
+
+.bruno-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: block;
+}
+
+.bruno-prompt-error {
+  min-height: 1.2em;
+}
+
+.bruno-prompt-input {
+  width: 100%;
+}
+
+.bruno-prompt-setting {
+  border: none;
+}
+
+.workspace-tab-header.bruno-preview .workspace-tab-header-inner-title {
+  font-style: italic;
+}
