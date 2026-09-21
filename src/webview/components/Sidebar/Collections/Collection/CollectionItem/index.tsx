@@ -236,12 +236,7 @@ const CollectionItem = ({ item, collectionUid, collectionPathname, searchText }:
     } else {
       if (isSidebarMode()) {
         // Open folder settings in VSCode editor
-        ipcRenderer.send('sidebar:open-folder-settings', {
-          collectionUid,
-          collectionPath: collectionPathname,
-          folderUid: item.uid,
-          folderPath: item.pathname
-        });
+        openFolderSettingsInEditor(true);
         // Also expand the folder if collapsed
         if (item.collapsed) {
           dispatch(
@@ -289,7 +284,22 @@ const CollectionItem = ({ item, collectionUid, collectionPathname, searchText }:
     menuDropdownRef.current?.show();
   };
 
+  const openFolderSettingsInEditor = (preview: boolean) => {
+    ipcRenderer.send('sidebar:open-folder-settings', {
+      collectionUid,
+      collectionPath: collectionPathname,
+      folderUid: item.uid,
+      folderPath: item.pathname,
+      preview
+    });
+  };
+
   const handleDoubleClick = () => {
+    if (isSidebarMode()) {
+      if (isItemARequest(item)) { openRequestInVSCodeEditor(item.pathname, false); }
+      else if (isItemAFolder(item)) { openFolderSettingsInEditor(false); }
+      return;
+    }
     dispatch(makeTabPermanent({ uid: item.uid }));
   };
 
@@ -403,12 +413,7 @@ const CollectionItem = ({ item, collectionUid, collectionPathname, searchText }:
   const viewFolderSettings = () => {
     if (isItemAFolder(item)) {
       if (isSidebarMode()) {
-        ipcRenderer.send('sidebar:open-folder-settings', {
-          collectionUid,
-          collectionPath: collectionPathname,
-          folderUid: item.uid,
-          folderPath: item.pathname
-        });
+        openFolderSettingsInEditor(false);
         return;
       }
       if (isTabForItemPresent) {

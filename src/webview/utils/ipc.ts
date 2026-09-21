@@ -37,9 +37,17 @@ function getVsCodeApi(): VsCodeApi {
         console.error('[Bruno IPC] Error acquiring VS Code API:', err);
         throw err;
       }
+    } else if (window.parent && window.parent !== window) {
+      // Obsidian host: the app runs in a plain iframe, so talk to the parent.
+      let state: unknown = null;
+      vscode = {
+        postMessage: (message: any) => window.parent.postMessage(message, '*'),
+        getState: () => state,
+        setState: (next: any) => { state = next; }
+      };
     } else {
-      console.error('[Bruno IPC] acquireVsCodeApi is not available');
-      throw new Error('VS Code API not available');
+      console.error('[Bruno IPC] no host bridge available');
+      throw new Error('Host bridge not available');
     }
   }
   return vscode;

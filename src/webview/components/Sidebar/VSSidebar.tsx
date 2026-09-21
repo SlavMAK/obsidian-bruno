@@ -1,17 +1,13 @@
 import { useState, useMemo, useEffect } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
-import toast from 'react-hot-toast';
+import { useSelector } from 'react-redux';
 import styled from 'styled-components';
 import {
   IconWorld,
   IconPlus,
-  IconFolder,
-  IconDownload,
+  IconRefresh,
   IconSearch
 } from '@tabler/icons';
 import { ipcRenderer } from 'utils/ipc';
-import { openCollection } from 'providers/ReduxStore/slices/collections/actions';
-import MenuDropdown from 'ui/MenuDropdown';
 import ActionIcon from 'ui/ActionIcon';
 import Collection from './Collections/Collection';
 import CollectionSearch from './Collections/CollectionSearch/index';
@@ -129,7 +125,6 @@ const StyledVSSidebar = styled.div`
 `;
 
 const VSSidebar = () => {
-  const dispatch = useDispatch();
   const [showSearch, setShowSearch] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [isInitializing, setIsInitializing] = useState(true);
@@ -167,18 +162,14 @@ const VSSidebar = () => {
     ipcRenderer.send('sidebar:open-global-environments');
   };
 
-  const handleCreateCollection = () => {
-    ipcRenderer.send('sidebar:open-create-collection');
+  // Obsidian: the vault itself is the collection, so there is nothing to
+  // create, open or import — only to initialise once.
+  const handleInitCollection = () => {
+    ipcRenderer.send('sidebar:init-collection');
   };
 
-  const handleOpenCollection = () => {
-    dispatch(openCollection() as any).catch(() => {
-      toast.error('An error occurred while opening the collection');
-    });
-  };
-
-  const handleImportCollection = () => {
-    ipcRenderer.send('sidebar:open-import-collection');
+  const handleRefresh = () => {
+    ipcRenderer.send('sidebar:refresh-collections');
   };
 
   const handleToggleSearch = () => {
@@ -187,27 +178,6 @@ const VSSidebar = () => {
       setSearchText('');
     }
   };
-
-  const addDropdownItems = [
-    {
-      id: 'create',
-      leftSection: IconPlus,
-      label: 'Create collection',
-      onClick: handleCreateCollection
-    },
-    {
-      id: 'open',
-      leftSection: IconFolder,
-      label: 'Open collection',
-      onClick: handleOpenCollection
-    },
-    {
-      id: 'import',
-      leftSection: IconDownload,
-      label: 'Import collection',
-      onClick: handleImportCollection
-    }
-  ];
 
   const hasCollections = workspaceCollections && workspaceCollections.length > 0;
 
@@ -223,19 +193,13 @@ const VSSidebar = () => {
             <IconWorld size={14} stroke={1.5} aria-hidden="true" />
           </ActionIcon>
 
+          <ActionIcon onClick={handleRefresh} label="Refresh collections">
+            <IconRefresh size={14} stroke={1.5} aria-hidden="true" />
+          </ActionIcon>
+
           <ActionIcon onClick={handleToggleSearch} label="Search requests">
             <IconSearch size={14} stroke={1.5} aria-hidden="true" />
           </ActionIcon>
-
-          <MenuDropdown
-            data-testid="collections-header-add-menu"
-            items={addDropdownItems}
-            placement="bottom-end"
-          >
-            <ActionIcon label="Add new collection">
-              <IconPlus size={14} stroke={1.5} aria-hidden="true" />
-            </ActionIcon>
-          </MenuDropdown>
 
         </div>
       </div>
@@ -256,17 +220,10 @@ const VSSidebar = () => {
               <div className="empty-actions">
                 <button
                   className="empty-action-btn primary"
-                  onClick={handleCreateCollection}
+                  onClick={handleInitCollection}
                 >
                   <IconPlus size={14} strokeWidth={1.5} />
-                  Create Collection
-                </button>
-                <button
-                  className="empty-action-btn secondary"
-                  onClick={handleOpenCollection}
-                >
-                  <IconFolder size={14} strokeWidth={1.5} />
-                  Open Collection
+                  Init collection
                 </button>
               </div>
             </div>

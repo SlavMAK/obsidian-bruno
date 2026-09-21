@@ -18,6 +18,17 @@
       font-family: var(--vscode-font-family);
     }
   </style>
+  <script>
+    // Buffer host events that arrive before the React bundle registers its
+    // listener; utils/ipc.ts drains this on startup.
+    window.__brunoMessageBuffer = [];
+    window.addEventListener('message', function (event) {
+      try {
+        var buf = window.__brunoMessageBuffer;
+        if (buf) { buf.push(event.data); }
+      } catch (e) { /* document is being torn down */ }
+    });
+  </script>
 </head>
 <body>
   <div id="root"></div>

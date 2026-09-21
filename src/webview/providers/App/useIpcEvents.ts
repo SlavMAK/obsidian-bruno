@@ -22,6 +22,7 @@ import {
   streamDataReceived,
   addTransientRequest,
   removeTransientRequest,
+  removeCollection,
   updateCollectionTagsList
 } from 'providers/ReduxStore/slices/collections';
 import {
@@ -226,6 +227,11 @@ const useIpcEvents = () => {
     });
 
     const removeCollectionTreeUpdateListener = ipcRenderer.on('main:collection-tree-updated', _collectionTreeUpdated);
+
+    // Obsidian host: "refresh collections" drops the store copy before rescanning.
+    const removeCollectionRemovedListener = ipcRenderer.on('main:collection-removed', ({ collectionUid }: { collectionUid: string }) => {
+      dispatch(removeCollection({ collectionUid }));
+    });
 
     const removeWorkspaceConfigUpdatedListener = ipcRenderer.on('main:workspace-config-updated', (workspacePath, workspaceUid, workspaceConfig) => {
       dispatch(workspaceConfigUpdatedEvent(workspacePath, workspaceUid, workspaceConfig));
@@ -648,6 +654,7 @@ const useIpcEvents = () => {
 
     return () => {
       removeCollectionTreeUpdateListener();
+      removeCollectionRemovedListener();
       removeOpenCollectionListener();
       removeOpenWorkspaceListener();
       removeWorkspaceConfigUpdatedListener();

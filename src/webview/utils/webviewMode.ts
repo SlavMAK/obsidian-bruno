@@ -8,9 +8,9 @@ export const isSidebarMode = (): boolean => {
   return window.BRUNO_WEBVIEW_MODE === 'sidebar';
 };
 
-export const openRequestInVSCodeEditor = (requestPath: string): void => {
+export const openRequestInVSCodeEditor = (requestPath: string, preview = true): void => {
   if (isSidebarMode() && window.ipcRenderer) {
-    window.ipcRenderer.send('sidebar:open-request', requestPath);
+    window.ipcRenderer.send('sidebar:open-request', requestPath, { preview });
   }
 };
 

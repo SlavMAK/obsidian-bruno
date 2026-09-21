@@ -3,6 +3,7 @@ import { handleMakeTabParmanent } from './utils';
 import { findCollectionByUid, findItemInCollection } from 'utils/collections';
 import { hasRequestChanges }from 'utils/collections';
 import { updateCollectionTagsList } from '../../slices/collections';
+import { isSidebarMode } from 'utils/webviewMode';
 
 interface actionsToInterceptProps {
   dispatch?: boolean;
@@ -113,6 +114,8 @@ export const draftDetectMiddleware = ({
   if (actionsToIntercept.includes(action.type)) {
     const state = getState();
     handleMakeTabParmanent(state, action, dispatch);
+    // Editor webview: the Obsidian leaf is the tab; the host ignores this once pinned.
+    if (!isSidebarMode()) { window.ipcRenderer?.send('editor:tab-permanent'); }
   }
   const result = next(action);
 
