@@ -4,6 +4,8 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { builtinModules } from 'node:module';
 
+import { createEmbedWebviewPlugin } from './esbuild.webview-embed.mjs';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isWatch = process.argv.includes('--watch');
 const nodeModulesPath = path.join(__dirname, 'node_modules');
@@ -76,7 +78,7 @@ const buildOptions = {
   sourcemap: isWatch ? 'inline' : false,
   minify: !isWatch,
   external,
-  plugins: [vscodeShimPlugin, quickjsSingleFilePlugin, punycodePlugin, patchNodeVmPlugin],
+  plugins: [vscodeShimPlugin, quickjsSingleFilePlugin, punycodePlugin, patchNodeVmPlugin, createEmbedWebviewPlugin({ rootDir: __dirname, isWatch })],
   logLevel: 'info',
   // esbuild leaves `import.meta.url` undefined in CJS output, which breaks
   // QuickJS's node loader inside @usebruno/js.

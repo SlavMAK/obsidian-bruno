@@ -8,6 +8,7 @@ import { PromptModal, ConfirmModal, PickModal } from './modals';
 import { BrunoView, SIDEBAR_VIEW_TYPE, EDITOR_VIEW_TYPE, type ViewMode } from './view';
 import { registerShellHandlers, viewKey, type ViewData } from './shell';
 import { initLog, disposeLog, logPath } from './log';
+import { ensureWebviewAssets } from './webview-assets';
 
 import { registerHandler, registerCoreHandlers, setMessageSender, setWebviewSender, emit, handleInvoke } from '../extension/ipc/handlers';
 import { stateManager } from '../extension/webview/state-manager';
@@ -51,6 +52,9 @@ export default class BrunoPlugin extends Plugin {
     // here; `__dirname` is undefined inside Obsidian's plugin loader.
     globals.__brunoPluginDir = pluginDir;
     initLog(pluginDir, this.manifest.id);
+    // A catalog install brings only main.js/manifest.json/styles.css, so the
+    // webview bundle has to be unpacked out of main.js before any view opens.
+    await ensureWebviewAssets(pluginDir);
     // The renderer has XMLHttpRequest, so axios would pick its XHR adapter and
     // every request would hit Chromium's CORS. Bruno's engine (stream responses,
     // agents, proxies, cookies) is written for Node's http adapter.

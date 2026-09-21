@@ -29,6 +29,8 @@ verify:
   script:
     - npm run typecheck
     - npm run build
+    - npm run test:load
+    - npm run test:webview
 
 mirror:github:
   stage: mirror
