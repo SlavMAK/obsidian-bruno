@@ -32,7 +32,10 @@ verify:
 
 mirror:github:
   stage: mirror
-  image: alpine/git:2.45.2
+  image:
+    name: alpine/git:2.45.2
+    # У образа ENTRYPOINT ["git"], иначе раннер зовёт `git sh -c ...`.
+    entrypoint: [""]
   needs: [verify]
   rules:
     # Зеркалим только ветку по умолчанию и только из этого проекта
