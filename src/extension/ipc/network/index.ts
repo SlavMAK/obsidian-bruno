@@ -10,6 +10,7 @@ import { getCookieStringForUrl, saveCookies } from '../../utils/cookies';
 import { createFormData, formatMultipartData } from '../../utils/form-data';
 import { readFileBody, getSelectedFileBodyEntry, DEFAULT_FILE_BODY_CONTENT_TYPE } from '../../utils/file-body';
 import { safeStringifyJSON } from '../../utils/common';
+import { stripJsonComments } from '../../utils/json-comments';
 import { getPreferences, preferencesUtil } from '../../store/preferences';
 import { getProcessEnvVars } from '../../store/process-env';
 import { getCertsAndProxyConfig } from './cert-utils';
@@ -616,8 +617,10 @@ const getRequestData = (body: BrunoRequest['body']): unknown => {
   }
 
   switch (body.mode) {
-    case 'json':
-      return body.json || undefined;
+    case 'json': {
+      const json = body.json ? stripJsonComments(body.json) : '';
+      return json.trim() ? json : undefined;
+    }
 
     case 'text':
       return body.text || undefined;

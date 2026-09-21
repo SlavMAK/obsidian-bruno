@@ -2,6 +2,7 @@
 import type { AxiosRequestConfig } from 'axios';
 import { get, filter } from 'lodash';
 import { utils as brunoUtilsRaw } from '@usebruno/common';
+import { stripJsonComments } from '../../utils/json-comments';
 
 // Type assertion for @usebruno/common utils (no type definitions available)
 const brunoUtils = brunoUtilsRaw as {
@@ -84,13 +85,18 @@ const prepareBody = (body: BrunoRequest['body'], headers: Record<string, string>
   }
 
   switch (body.mode) {
-    case 'json':
+    case 'json': {
       headers['content-type'] = headers['content-type'] || 'application/json';
-      try {
-        return body.json ? JSON.parse(body.json) : undefined;
-      } catch {
-        return body.json;
+      const json = body.json ? stripJsonComments(body.json) : '';
+      if (!json.trim()) {
+        return undefined;
       }
+      try {
+        return JSON.parse(json);
+      } catch {
+        return json;
+      }
+    }
 
     case 'text':
       headers['content-type'] = headers['content-type'] || 'text/plain';
