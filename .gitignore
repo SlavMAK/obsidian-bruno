@@ -1,7 +1,7 @@
 node_modules/
-main.js
-main.js.map
-webview/
+/main.js
+/main.js.map
+/webview/
 emscripten-module.wasm
 test/.smoke.cjs
 test/emscripten-module.wasm

@@ -1,0 +1,245 @@
+import React, { useRef, useEffect, useState, Suspense } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import find from 'lodash/find';
+import { findItemInCollection, findCollectionByUid, getDefaultRequestPaneTab } from 'utils/collections';
+import { hasPlatformSupport } from 'utils/common/platform';
+import { PREVIEW_SAVE_HOTKEY_MESSAGE, PREVIEW_SAVE_MIN_INTERVAL_MS } from 'utils/common/constants';
+import StyledWrapper from './StyledWrapper';
+import useGrpcEventListeners from 'utils/network/grpc-event-listeners';
+import useWsEventListeners from 'utils/network/ws-event-listeners';
+
+import { ViewContainer, ViewData } from 'views';
+
+import { addTab, updateScriptPaneTab, setFocusErrorLine } from 'providers/ReduxStore/slices/tabs';
+import { updateSettingsSelectedTab, updatedFolderSettingsSelectedTab } from 'providers/ReduxStore/slices/collections';
+import {
+  saveRequest,
+  saveFolderRoot,
+  saveCollectionSettings
+} from 'providers/ReduxStore/slices/collections/actions';
+
+export default function Main(): React.ReactElement {
+  const lastPreviewSaveRef = useRef(0);
+  const mainSectionRef = useRef<HTMLDivElement>(null);
+  const dispatch = useDispatch();
+  const collections = useSelector((state: any) => state.collections.collections);
+  const tabs = useSelector((state: any) => state.tabs.tabs);
+  const activeTabUid = useSelector((state: any) => state.tabs.activeTabUid);
+
+  const [viewData, setViewData] = useState<ViewData>({ viewType: 'empty' });
+
+  useGrpcEventListeners();
+  useWsEventListeners();
+
+  useEffect(() => {
+    if (viewData.viewType === 'empty') {
+      return;
+    }
+
+    // This allows ResponsePane/RequestPane to track sub-tab selections
+    const viewsNeedingTabState = ['request', 'response-example'];
+    if (viewsNeedingTabState.includes(viewData.viewType) && viewData.itemUid) {
+      // Wait for the item to be loaded in the collection before creating the tab.
+      // Items are loaded asynchronously via file watcher events. Without the item,
+      // we can't determine the correct requestPaneTab (e.g. 'body' for WS/gRPC,
+      // 'query' for GraphQL). This effect re-runs when collections update.
+      if (viewData.collectionUid) {
+        const collection = findCollectionByUid(collections, viewData.collectionUid);
+        if (collection) {
+          const item = findItemInCollection(collection, viewData.itemUid);
+          if (item) {
+            dispatch(addTab({
+              uid: viewData.itemUid,
+              collectionUid: viewData.collectionUid,
+              requestPaneTab: getDefaultRequestPaneTab(item),
+              type: 'request',
+              preview: false
+            }));
+          }
+        }
+      }
+    } else if (viewData.viewType === 'collection-runner' && viewData.collectionUid) {
+      // Runner tab uses a unique ID to allow opening alongside collection-settings
+      dispatch(addTab({
+        uid: `runner-${viewData.collectionUid}`,
+        collectionUid: viewData.collectionUid,
+        type: 'collection-runner',
+        preview: false
+      }));
+    } else if (viewData.viewType === 'collection-settings' && viewData.collectionUid) {
+      // Collection settings uses a unique ID to allow opening alongside runner
+      const tabUid = `settings-${viewData.collectionUid}`;
+      dispatch(addTab({
+        uid: tabUid,
+        collectionUid: viewData.collectionUid,
+        type: 'collection-settings',
+        preview: false
+      }));
+    } else if (viewData.viewType === 'folder-settings' && viewData.folderUid) {
+      dispatch(addTab({
+        uid: viewData.folderUid,
+        collectionUid: viewData.collectionUid,
+        type: 'folder-settings',
+        preview: false
+      }));
+    } else if (viewData.viewType === 'global-environments') {
+      dispatch(addTab({
+        uid: 'global-environments',
+        collectionUid: null,
+        type: 'global-environment-settings',
+        preview: false
+      }));
+    } else if (viewData.viewType === 'environment-settings' && viewData.collectionUid) {
+      dispatch(addTab({
+        uid: `env-settings-${viewData.collectionUid}`,
+        collectionUid: viewData.collectionUid,
+        type: 'environment-settings',
+        preview: false
+      }));
+    } else if (viewData.viewType === 'variables' && viewData.collectionUid) {
+      dispatch(addTab({
+        uid: `variables-${viewData.collectionUid}`,
+        collectionUid: viewData.collectionUid,
+        type: 'variables',
+        preview: false
+      }));
+    }
+  }, [viewData, dispatch, collections]);
+
+  useEffect(() => {
+    const focus = viewData.focusScriptError;
+    if (!focus) return;
+
+    const { scriptPhase, line } = focus;
+    const focusTab = (uid: string) => {
+      if (scriptPhase !== 'test') {
+        dispatch(updateScriptPaneTab({ uid, scriptPaneTab: scriptPhase }));
+      }
+      if (typeof line === 'number') {
+        dispatch(setFocusErrorLine({ uid, scriptPhase, line, requestedAt: Date.now() }));
+      }
+    };
+
+    if (viewData.viewType === 'collection-settings' && viewData.collectionUid) {
+      dispatch(updateSettingsSelectedTab({
+        collectionUid: viewData.collectionUid,
+        tab: scriptPhase === 'test' ? 'tests' : 'script'
+      }));
+      focusTab(`settings-${viewData.collectionUid}`);
+    } else if (viewData.viewType === 'folder-settings' && viewData.folderUid) {
+      dispatch(updatedFolderSettingsSelectedTab({
+        collectionUid: viewData.collectionUid,
+        folderUid: viewData.folderUid,
+        tab: scriptPhase === 'test' ? 'test' : 'script'
+      }));
+      focusTab(viewData.folderUid);
+    }
+  }, [viewData, dispatch]);
+
+  useEffect(() => {
+    if (mainSectionRef.current) {
+      mainSectionRef.current.setAttribute('data-app-state', 'loaded');
+    }
+
+    if (!hasPlatformSupport()) {
+      return;
+    }
+
+    const { ipcRenderer } = window;
+
+    const removeSetViewListener = ipcRenderer.on('main:set-view', (data: ViewData) => {
+      setViewData(data);
+    });
+
+    const removeAppLoadedListener = ipcRenderer.on('main:app-loaded', () => {
+      if (mainSectionRef.current) {
+        mainSectionRef.current.setAttribute('data-app-state', 'loaded');
+      }
+    });
+
+    // Request initial view data from extension
+    ipcRenderer.invoke('renderer:get-initial-view').then((data: ViewData | null) => {
+      if (data) {
+        setViewData(data);
+      }
+    }).catch((err: Error) => {
+      console.error('[Bruno] No initial view data:', err.message);
+    });
+
+    return () => {
+      removeSetViewListener();
+      removeAppLoadedListener();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!hasPlatformSupport()) return;
+
+    const saveActiveTab = () => {
+      const activeTab = find(tabs, (t: any) => t.uid === activeTabUid);
+      if (!activeTab) return;
+
+      if (activeTab.type === 'environment-settings' || activeTab.type === 'global-environment-settings') {
+        window.dispatchEvent(new CustomEvent('environment-save'));
+        return;
+      }
+
+      const collection = findCollectionByUid(collections, activeTab.collectionUid);
+      if (collection) {
+        const item = findItemInCollection(collection, activeTab.uid);
+        if (item && item.uid) {
+          if (activeTab.type === 'folder-settings') {
+            dispatch(saveFolderRoot(collection.uid, item.uid));
+          } else {
+            dispatch(saveRequest(activeTab.uid, activeTab.collectionUid));
+          }
+        } else if (activeTab.type === 'collection-settings') {
+          dispatch(saveCollectionSettings(collection.uid));
+        }
+      }
+    };
+
+    const { ipcRenderer } = window;
+    const removeTriggerSaveListener = ipcRenderer.on('main:trigger-save', saveActiveTab);
+
+    const onPreviewHotkey = (event: MessageEvent) => {
+      const { type, action } = event.data || {};
+      if (type !== PREVIEW_SAVE_HOTKEY_MESSAGE.type || action !== PREVIEW_SAVE_HOTKEY_MESSAGE.action) return;
+
+      const previewFrames = document.querySelectorAll<HTMLIFrameElement>('iframe[data-html-preview]');
+      if (![...previewFrames].some((frame) => frame.contentWindow === event.source)) return;
+
+      // The previewed page is remote and can post this itself, so a run of them is collapsed.
+      const now = Date.now();
+      if (now - lastPreviewSaveRef.current < PREVIEW_SAVE_MIN_INTERVAL_MS) return;
+      lastPreviewSaveRef.current = now;
+
+      saveActiveTab();
+    };
+    window.addEventListener('message', onPreviewHotkey);
+
+    return () => {
+      removeTriggerSaveListener();
+      window.removeEventListener('message', onPreviewHotkey);
+    };
+  }, [tabs, activeTabUid, collections, dispatch]);
+
+  return (
+    <div id="main-container" className="flex flex-col h-screen max-h-screen overflow-hidden">
+      <div
+        ref={mainSectionRef}
+        className="flex-1 min-h-0 flex"
+        data-app-state="loading"
+        style={{ height: '100vh' }}
+      >
+        <StyledWrapper style={{ height: '100%', width: '100%', zIndex: 1 }}>
+          <section className="flex flex-grow flex-col overflow-hidden w-full">
+            <Suspense fallback={<div className="flex-1" />}>
+              <ViewContainer viewData={viewData} />
+            </Suspense>
+          </section>
+        </StyledWrapper>
+      </div>
+    </div>
+  );
+}
