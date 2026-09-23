@@ -73,9 +73,9 @@ export default class BrunoPlugin extends Plugin {
       confirm: (message: string, actions: string[]) =>
         new Promise(resolve => new ConfirmModal(this.app, message, actions, resolve).open()),
       notice: (message: string) => { new Notice(message); },
-      pickFromList: <T extends QuickPickItem>(items: T[], placeholder?: string) =>
+      pickFromList: <T extends QuickPickItem>(items: T[], placeholder?: string, heading?: string) =>
         new Promise<T | undefined>(resolve => {
-          new PickModal<T>(this.app, items, placeholder, resolve as (v: T | undefined) => void).open();
+          new PickModal<T>(this.app, items, placeholder, resolve as (v: T | undefined) => void, heading).open();
         })
     });
 
@@ -98,6 +98,11 @@ export default class BrunoPlugin extends Plugin {
       closeView: w => this.closeView(w),
       pinView: w => this.editorViews().find(v => v.webview === w)?.setPreview(false),
       viewDataFor: w => this.editorViews().find(v => v.webview === w)?.viewData ?? undefined,
+      closeViewsForCollection: (p, u) => this.closeViewsForCollection(p, u),
+      markDirty: (webview, payload) => {
+        const view = [...this.editorViews(), this.sidebarView()].find(v => v?.webview === webview);
+        view?.setDirtyState(payload);
+      },
       vault: { root: this.vaultRoot(), name: this.app.vault.getName(), configDir: this.app.vault.configDir }
     });
     setSidebarWebviewGetter(() => this.sidebarView()?.webview as never);
@@ -215,9 +220,9 @@ export default class BrunoPlugin extends Plugin {
     registerWorkspaceIpc({ addWatcher: () => {}, removeWatcher: () => {} });
 
     // VS Code owned the text buffer and needed a dirty-state protocol; Obsidian
-    // does not open .bru files itself, so the React app is the only writer.
+    // does not open .bru files itself, so the React app is the only writer and
+    // `renderer:set-dirty-state` is wired to the tabs in shell.ts.
     registerHandler('renderer:get-dirty-state', async () => false);
-    registerHandler('renderer:set-dirty-state', async () => undefined);
     registerHandler('renderer:sync-document', async () => undefined);
     registerHandler('renderer:write-file-vscode', async () => undefined);
     registerHandler('renderer:reveal-script-error-source', async () => undefined);
@@ -262,5 +267,17 @@ export default class BrunoPlugin extends Plugin {
 
   closeView(webview: unknown): void {
     this.editorViews().find(v => v.webview === webview)?.leaf.detach();
+  }
+
+  /** A collection vanished from disk (git revert, delete): detach its editor tabs. */
+  closeViewsForCollection(collectionPath: string, collectionUid: string): void {
+    const root = nodePath.resolve(collectionPath);
+    for (const view of this.editorViews()) {
+      const data = view.viewData;
+      if (!data) { continue; }
+      const sameCollection = (!!data.collectionUid && data.collectionUid === collectionUid)
+        || (!!data.collectionPath && nodePath.resolve(data.collectionPath) === root);
+      if (sameCollection) { view.leaf.detach(); }
+    }
   }
 }

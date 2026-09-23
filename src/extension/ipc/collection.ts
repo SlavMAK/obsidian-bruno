@@ -2051,7 +2051,14 @@ get {
     // new panel for 2–3s), replay collection-opened metadata to the calling
     // webview only. Panels that need the tree (Runner, Export, Environment
     // Settings) load it themselves on demand.
-    if (collectionsInitialized) {
+    //
+    // Only replay when there is something watched to replay: if a git
+    // checkout deleted a collection's config, the "gone" handling dropped
+    // its watchers and the replay below would silently do nothing forever.
+    // With an empty watch list fall through to the full restore instead, so
+    // a collection that is back on disk reopens.
+    const hasWatchedCollections = collectionWatcher.getWatchedCollectionPaths().length > 0;
+    if (collectionsInitialized && hasWatchedCollections) {
       const currentWebview = getCurrentWebview();
       if (!currentWebview) return;
       const panelSender = (channel: string, ...args: unknown[]) => {

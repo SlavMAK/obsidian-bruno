@@ -9,7 +9,7 @@
  */
 
 import { ipcRenderer } from 'utils/ipc';
-import { findItemInCollection, findCollectionByUid, isItemARequest, isItemAFolder } from 'utils/collections';
+import { findItemInCollection, findCollectionByUid, isItemARequest, isItemAFolder, hasRequestChanges } from 'utils/collections';
 
 // Actions that create drafts (make items dirty)
 const draftCreatingActions = [
@@ -172,7 +172,10 @@ export const vscodeDirtyStateMiddleware = ({
           const filePath = getItemFilePath(item);
           console.log('[VSCodeDirtyState] Found item, filePath:', filePath);
           if (filePath) {
-            notifyDirtyState(filePath, itemUid, collectionUid, 'request', true);
+            // A draft object may exist yet equal the saved file (the user
+            // reverted their edit); mirror the Save button's hasRequestChanges
+            // check so the host tab clears its dot on revert, not just on save.
+            notifyDirtyState(filePath, itemUid, collectionUid, 'request', hasRequestChanges(item));
           } else {
             console.warn('[VSCodeDirtyState] Item has no pathname! Item:', {
               uid: item.uid,

@@ -12,14 +12,19 @@ import os from 'os';
 import fs from 'fs';
 import path from 'path';
 
-import { handleInvoke, setMessageSender } from '../src/extension/ipc/handlers';
+import { handleInvoke, setMessageSender, emit, setCurrentWebview, clearCurrentWebview } from '../src/extension/ipc/handlers';
 import registerNetworkIpc from '../src/extension/ipc/network/index';
+import registerCollectionIpc from '../src/extension/ipc/collection';
 import { setExtensionContext as setPreferencesContext } from '../src/extension/store/preferences';
 import { setExtensionContext as setCookiesContext, cookiesStore } from '../src/extension/store/cookies';
 import { setExtensionContext as setOAuth2Context } from '../src/extension/store/oauth2';
 import { setExtensionContext as setCollectionSecurityContext } from '../src/extension/store/collection-security';
+import { setExtensionContext as setLastCollectionsContext } from '../src/extension/store/last-opened-collections';
+import { setMessageSender as setCollectionsMessageSender } from '../src/extension/app/collections';
+import collectionWatcher from '../src/extension/app/collection-watcher';
 import { Uri, RelativePattern, workspace, window as vscodeWindow } from '../src/obsidian/vscode-shim';
 import { registerShellHandlers, viewDataForFile, viewKey, initCollection, seedRuntimeVariables, type ViewData } from '../src/obsidian/shell';
+import { BrunoView } from '../src/obsidian/view';
 import { generateUidBasedOnHash } from '../src/extension/utils/common';
 
 const memory: Record<string, unknown> = {};
@@ -220,11 +225,110 @@ async function testShellRouting(): Promise<void> {
   console.log('ok  init collection in vault root');
 }
 
+/**
+ * A git checkout that deletes bruno.json drops the vault's watchers; when the
+ * config comes back, both recovery paths must reopen it.
+ */
+async function testRefreshRecoversTheVault(): Promise<void> {
+  const vault = path.join(tmp, 'git-vault');
+  fs.mkdirSync(vault, { recursive: true });
+  fs.writeFileSync(path.join(vault, 'bruno.json'), JSON.stringify({ version: '1', name: 'git-vault', type: 'collection' }));
+
+  const events: Array<{ channel: string; args: unknown[] }> = [];
+  setCollectionsMessageSender((channel, ...args) => { events.push({ channel, args }); });
+  registerShellHandlers({
+    openView: async () => {}, closeView: () => {}, pinView: () => {},
+    viewDataFor: () => undefined, closeViewsForCollection: () => {},
+    vault: { root: vault, name: 'git-vault', configDir: '.obsidian' }
+  });
+
+  // Nothing is watched anymore (the "collection gone" handling ran); refresh
+  // must still reopen the vault that is a collection on disk again.
+  assert.strictEqual(collectionWatcher.getWatchedCollectionPaths().length, 0);
+  await handleInvoke('sidebar:refresh-collections', []);
+  const opened = events.find(e => e.channel === 'main:collection-opened');
+  assert.ok(opened, 'refresh must reopen a collection that vanished from the watch list');
+  assert.strictEqual(path.resolve(opened!.args[0] as string), path.resolve(vault));
+  assert.ok(collectionWatcher.hasWatcher(path.resolve(vault)), 'refresh must re-attach the watchers');
+  console.log('ok  refresh recovers a collection gone from the watch list');
+
+  collectionWatcher.removeWatcher(path.resolve(vault), generateUidBasedOnHash(vault));
+}
+
+/**
+ * renderer:ready on a sidebar remount only replays *watched* collections; when
+ * the watch list is empty (the vault "went away" before the plugin reload),
+ * the last-opened restore must run instead of silently doing nothing.
+ */
+async function testRendererReadyRestoresVanishedCollection(): Promise<void> {
+  const root = path.join(tmp, 'restored');
+  fs.mkdirSync(root, { recursive: true });
+
+  registerCollectionIpc(collectionWatcher);
+  const channels: string[] = [];
+  setCollectionsMessageSender(channel => { channels.push(channel); });
+
+  // A config-less vault can only yield nothing on the first pass.
+  memory['lastOpenedCollections'] = [root];
+  emit('main:renderer-ready');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(!channels.includes('main:collection-opened'), 'a vault without bruno.json must not open');
+
+  // git checkout restores bruno.json while the app keeps running; the next
+  // renderer-ready must reopen from lastOpenedCollections.
+  fs.writeFileSync(path.join(root, 'bruno.json'), JSON.stringify({ version: '1', name: 'restored', type: 'collection' }));
+  emit('main:renderer-ready');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(channels.includes('main:collection-opened'),
+    'renderer-ready must reopen last-opened collections when nothing is watched');
+  console.log('ok  renderer-ready restores a collection that came back on disk');
+}
+
+/**
+ * The renderer's dirty-state middleware reports every draft creation and save
+ * through `renderer:set-dirty-state`; the tab of the webview that sent it must
+ * pick up (and lose) the unsaved-changes marker.
+ */
+async function testDirtyTabIndicator(): Promise<void> {
+  const marked: boolean[] = [];
+  const header = { toggleClass: (cls: string, on: boolean) => { if (cls === 'bruno-dirty') { marked.push(on); } } };
+  const view = new BrunoView({ tabHeaderEl: header } as never, undefined as never, 'editor');
+  registerShellHandlers({
+    openView: async () => {}, closeView: () => {}, pinView: () => {},
+    viewDataFor: () => undefined, closeViewsForCollection: () => {},
+    markDirty: (webview, payload) => { if (webview === view.webview) { view.setDirtyState(payload); } },
+    vault: { root: tmp, name: 'vault', configDir: '.obsidian' }
+  });
+
+  const file = path.join(tmp, 'a.bru');
+  setCurrentWebview(view.webview as never);
+  try {
+    await handleInvoke('renderer:set-dirty-state', [{ filePath: file, isDirty: true }]);
+    assert.ok(marked[marked.length - 1], 'an unsaved draft must mark the tab');
+    // Two drafts on one tab: saving only one keeps the marker on.
+    await handleInvoke('renderer:set-dirty-state', [{ filePath: path.join(tmp, 'b.bru'), isDirty: true }]);
+    await handleInvoke('renderer:set-dirty-state', [{ filePath: file, isDirty: false }]);
+    assert.ok(marked[marked.length - 1], 'a second unsaved draft must keep the marker');
+    await handleInvoke('renderer:set-dirty-state', [{ filePath: path.join(tmp, 'b.bru'), isDirty: false }]);
+    assert.ok(!marked[marked.length - 1], 'saving every draft must clear the marker');
+
+    // A transient "Untitled" request has no file to save to: always dirty.
+    view.viewData = { viewType: 'request', collectionUid: 'c', collectionPath: tmp, itemUid: 'u', transient: true };
+    await handleInvoke('renderer:set-dirty-state', [{ filePath: file, isDirty: true }]);
+    await handleInvoke('renderer:set-dirty-state', [{ filePath: file, isDirty: false }]);
+    assert.ok(marked[marked.length - 1], 'a transient request must keep the marker');
+  } finally {
+    clearCurrentWebview();
+  }
+  console.log('ok  unsaved drafts mark their tab');
+}
+
 async function main(): Promise<void> {
   setPreferencesContext(context as never);
   setCookiesContext(context as never);
   setOAuth2Context(context as never);
   setCollectionSecurityContext(context as never);
+  setLastCollectionsContext(context as never);
   cookiesStore.initializeCookies();
   setMessageSender(() => {});
   registerNetworkIpc();
@@ -234,6 +338,9 @@ async function main(): Promise<void> {
   await testWatcherShim();
   await testHttpRequest();
   await testShellRouting();
+  await testRefreshRecoversTheVault();
+  await testRendererReadyRestoresVanishedCollection();
+  await testDirtyTabIndicator();
   console.log('smoke: all checks passed');
 }
 

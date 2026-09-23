@@ -64,6 +64,14 @@ const isEnvironmentsFolder = (pathname: string, collectionPath: string): boolean
   return path.normalize(dirname) === path.normalize(envDirectory);
 };
 
+/** The marker file that says `collectionPath` still holds a collection; gone after a git revert deletes it. */
+const hasCollectionConfig = (collectionPath: string): boolean => {
+  return (
+    fs.existsSync(path.join(collectionPath, 'opencollection.yml')) ||
+    fs.existsSync(path.join(collectionPath, 'bruno.json'))
+  );
+};
+
 export const isFolderRootFile = (pathname: string, collectionPath: string): boolean => {
   const basename = path.basename(pathname);
   const format = getCollectionFormat(collectionPath);
@@ -283,6 +291,30 @@ class CollectionWatcher {
   // watchers without scanning — so we can't rely on `watchers.has(path)`
   // to decide whether a scan is needed.
   private scannedCollections: Set<string> = new Set();
+  // Paths whose removal (git revert, OS delete) we have already reported.
+  private goneCollections: Set<string> = new Set();
+  private collectionGoneListeners: Array<(collectionPath: string, collectionUid: string) => void> = [];
+
+  /** Called once when a watched collection's config file disappears from disk. */
+  onCollectionGone(listener: (collectionPath: string, collectionUid: string) => void): void {
+    this.collectionGoneListeners.push(listener);
+  }
+
+  private handleCollectionGone(collectionPath: string, collectionUid: string): void {
+    const key = path.normalize(collectionPath);
+    if (this.goneCollections.has(key)) {
+      return;
+    }
+    this.goneCollections.add(key);
+    this.removeWatcher(collectionPath, collectionUid);
+    for (const listener of this.collectionGoneListeners) {
+      try {
+        listener(collectionPath, collectionUid);
+      } catch (err) {
+        console.error('Error in collection-gone listener:', err);
+      }
+    }
+  }
 
   initializeLoadingState(collectionUid: string): void {
     if (!this.loadingStates.has(collectionUid)) {
@@ -691,6 +723,7 @@ class CollectionWatcher {
 
     this.initializeLoadingState(collectionUid);
     this.startCollectionDiscovery(collectionUid);
+    this.goneCollections.delete(path.normalize(watchPath));
 
     const format = getCollectionFormat(watchPath);
     const watchers: vscode.FileSystemWatcher[] = [];
@@ -912,11 +945,30 @@ class CollectionWatcher {
     }
   }
 
+  /**
+   * Resolve the collection format, treating "the config vanished between the
+   * hasCollectionConfig check and this call" (a git checkout mid-event) as a
+   * gone-collection report instead of an uncaught throw from the watcher.
+   */
+  private collectionFormatOrReportGone(collectionPath: string, collectionUid: string): 'bru' | 'yml' | null {
+    try {
+      return getCollectionFormat(collectionPath);
+    } catch {
+      this.handleCollectionGone(collectionPath, collectionUid);
+      return null;
+    }
+  }
+
   private async handleFileAdd(
     pathname: string,
     collectionUid: string,
     collectionPath: string
   ): Promise<void> {
+    if (!hasCollectionConfig(collectionPath)) {
+      this.handleCollectionGone(collectionPath, collectionUid);
+      return;
+    }
+
     if (isBrunoConfigFile(pathname, collectionPath)) {
       await this.handleBrunoConfigChange(pathname, collectionUid, collectionPath);
       return;
@@ -942,7 +994,8 @@ class CollectionWatcher {
       return;
     }
 
-    const format = getCollectionFormat(collectionPath);
+    const format = this.collectionFormatOrReportGone(collectionPath, collectionUid);
+    if (format === null) { return; }
     if (hasRequestExtension(pathname, format)) {
       await this.handleRequestFile(pathname, collectionUid, collectionPath);
     }
@@ -953,6 +1006,11 @@ class CollectionWatcher {
     collectionUid: string,
     collectionPath: string
   ): Promise<void> {
+    if (!hasCollectionConfig(collectionPath)) {
+      this.handleCollectionGone(collectionPath, collectionUid);
+      return;
+    }
+
     if (isBrunoConfigFile(pathname, collectionPath)) {
       await this.handleBrunoConfigChange(pathname, collectionUid, collectionPath);
       return;
@@ -978,7 +1036,8 @@ class CollectionWatcher {
       return;
     }
 
-    const format = getCollectionFormat(collectionPath);
+    const format = this.collectionFormatOrReportGone(collectionPath, collectionUid);
+    if (format === null) { return; }
     if (hasRequestExtension(pathname, format)) {
       await this.handleRequestFileChange(pathname, collectionUid, collectionPath);
     }
@@ -989,12 +1048,21 @@ class CollectionWatcher {
     collectionUid: string,
     collectionPath: string
   ): void {
+    // A git revert can delete the whole collection; getCollectionFormat would
+    // throw on every unlink event, so report the loss once and let the host
+    // close whatever tabs still show it.
+    if (!hasCollectionConfig(collectionPath)) {
+      this.handleCollectionGone(collectionPath, collectionUid);
+      return;
+    }
+
     if (isEnvironmentsFolder(pathname, collectionPath)) {
       unlinkEnvironmentFile(pathname, collectionUid);
       return;
     }
 
-    const format = getCollectionFormat(collectionPath);
+    const format = this.collectionFormatOrReportGone(collectionPath, collectionUid);
+    if (format === null) { return; }
     if (hasRequestExtension(pathname, format)) {
       const basename = path.basename(pathname);
       const dirname = path.dirname(pathname);

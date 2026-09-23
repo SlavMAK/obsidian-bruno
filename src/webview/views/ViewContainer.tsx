@@ -42,7 +42,7 @@ import RequestIsLoading from 'components/RequestTabPanel/RequestIsLoading';
 import FolderNotFound from 'components/RequestTabPanel/FolderNotFound';
 import AppUnsupported from 'components/RequestTabPanel/AppUnsupported';
 
-import { findItemInCollection, findCollectionByUid } from 'utils/collections';
+import { findItemInCollection, findCollectionByUid, hasRequestChanges } from 'utils/collections';
 import { getGlobalEnvironmentVariables, getGlobalEnvironmentVariablesMasked } from 'utils/collections/index';
 import { cancelRequest, sendRequest } from 'providers/ReduxStore/slices/collections/actions';
 import { ipcRenderer } from 'utils/ipc';
@@ -235,7 +235,9 @@ const ViewContainer: React.FC<ViewContainerProps> = ({ viewData }) => {
     // Check if the current item has a draft and restore dirty state
     if (viewType === 'request' && itemUid) {
       const item = findItemInCollection(collection, itemUid);
-      if (item?.draft && item.pathname) {
+      // Draft may exist but equal the saved file (reverted edit): restore the
+      // dot only for real changes, same as the middleware's revert handling.
+      if (item?.draft && item.pathname && hasRequestChanges(item)) {
         notifyDirtyState(item.pathname, itemUid, 'request');
       }
     } else if (viewType === 'folder-settings' && folderUid) {

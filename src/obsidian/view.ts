@@ -33,6 +33,9 @@ export class BrunoView extends ItemView {
   private ready = false;
   /** The iframe document that said `renderer:ready`; a reload (e.g. the leaf was moved) replaces it. */
   private readyDocument: Document | null = null;
+  /** File paths (or transient uids) with unsaved drafts, as reported by the renderer. */
+  private dirtyKeys = new Set<string>();
+  private dirtyShown = false;
   private onMessage = this.handleMessage.bind(this);
 
   /** Stable `vscode.Webview`-shaped handle the IPC layer posts events to. */
@@ -62,8 +65,30 @@ export class BrunoView extends ItemView {
   async setState(state: PersistedViewState, result: ViewStateResult): Promise<void> {
     this.viewData = state?.viewData ?? null;
     this.setPreview(!!this.viewData?.preview);
+    this.applyDirtyIndicator();
     if (this.ready) { this.applyViewData(); }
     await super.setState(state, result);
+  }
+
+  /**
+   * One unsaved draft (a `.bru` file with a Redux draft, or a transient
+   * "Untitled" request) is enough to mark the tab; the React app reports
+   * every change through `renderer:set-dirty-state`.
+   */
+  setDirtyState(payload: { filePath?: string; itemUid?: string; isDirty?: boolean }): void {
+    const key = payload.filePath ?? payload.itemUid;
+    if (!key) { return; }
+    if (payload.isDirty) { this.dirtyKeys.add(key); } else { this.dirtyKeys.delete(key); }
+    this.applyDirtyIndicator();
+  }
+
+  private applyDirtyIndicator(): void {
+    const dirty = this.dirtyKeys.size > 0 || !!this.viewData?.transient;
+    if (dirty === this.dirtyShown) { return; }
+    this.dirtyShown = dirty;
+    const header = this.tabHeaderEl();
+    log('info', 'view', `tab dirty -> ${dirty}`, header ? 'tab header found' : 'NO TAB HEADER', this.viewData);
+    header?.toggleClass('bruno-dirty', dirty);
   }
 
   private tabHeaderEl(): HTMLElement | undefined {
@@ -88,6 +113,7 @@ export class BrunoView extends ItemView {
     this.iframe = iframe;
 
     this.registerEvent(this.app.workspace.on('css-change', () => applyTheme(iframe)));
+    this.applyDirtyIndicator();
 
     stateManager.addWebview(this.webview as never);
     if (this.mode === 'editor') { stateManager.setActiveEditorWebview(this.webview as never); }

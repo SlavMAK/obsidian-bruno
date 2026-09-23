@@ -21,6 +21,60 @@
   border: none;
 }
 
+.bruno-pick-title {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+  padding: 0 0 0.5em;
+  text-align: center;
+}
+
+.bruno-pick-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  overflow: hidden;
+}
+
+.bruno-pick-icon {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  color: var(--text-muted);
+}
+
+.bruno-pick-icon svg {
+  width: 1em;
+  height: 1em;
+  stroke-width: 2;
+}
+
+.bruno-pick-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .workspace-tab-header.bruno-preview .workspace-tab-header-inner-title {
   font-style: italic;
+}
+
+/* Unsaved Bruno drafts mark their tab with a yellow dot. Obsidian already
+   paints `.workspace-tab-header-inner::after` as the tab divider (and hides
+   it via opacity on the active tab), so the dot hangs off the tab icon,
+   whose pseudo-elements are unclaimed and which never ellipsizes. */
+.workspace-tab-header.bruno-dirty .workspace-tab-header-inner-icon {
+  position: relative;
+}
+
+.workspace-tab-header.bruno-dirty .workspace-tab-header-inner-icon::after {
+  content: '';
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--yellow, #e5c07b);
+  box-shadow: 0 0 0 1.5px var(--tab-background, var(--background-primary));
 }

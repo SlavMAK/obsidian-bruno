@@ -61,6 +61,10 @@ export interface ShellHost {
   /** Turn a preview view into a permanent one. */
   pinView(webview: vscode.Webview): void;
   viewDataFor(webview: vscode.Webview): ViewData | undefined;
+  /** Detach every editor leaf still showing a collection that no longer exists on disk. */
+  closeViewsForCollection(collectionPath: string, collectionUid: string): void;
+  /** Mark the tab hosting `webview` dirty/clean (unsaved `.bru` drafts). */
+  markDirty(webview: vscode.Webview, payload: { filePath?: string; itemUid?: string; isDirty?: boolean }): void;
   /** The vault is the one and only collection in Obsidian. */
   vault: { root: string; name: string; configDir: string };
 }
@@ -173,6 +177,13 @@ const nonEmpty = (value: string) => (!value || !value.trim() ? 'Name cannot be e
 
 export function registerShellHandlers(host: ShellHost): void {
   const uidOf = (p: string) => generateUidBasedOnHash(p);
+
+  // A git revert (or plain delete) can wipe the watched collection out from
+  // under open tabs; drop the sidebar's copy and close whatever leaves show it.
+  collectionWatcher.onCollectionGone((collectionPath, collectionUid) => {
+    stateManager.broadcast('main:collection-removed', { collectionUid });
+    host.closeViewsForCollection(collectionPath, collectionUid);
+  });
   const arg = <T extends object>(args: unknown[]): Partial<T> => (typeof args[0] === 'object' && args[0] ? args[0] : {}) as Partial<T>;
   type WithCollection = { collectionPath?: string; collectionUid?: string; folderUid?: string; folderPath?: string; itemUid?: string | null; itemPath?: string | null };
 
@@ -196,6 +207,15 @@ export function registerShellHandlers(host: ShellHost): void {
     const webview = getCurrentWebview();
     if (webview) { host.pinView(webview); }
   });
+  // The renderer's dirty-state middleware reports every draft creation and
+  // save; mark the sending tab so unsaved changes are visible while the user
+  // is looking at some other tab.
+  registerHandler('renderer:set-dirty-state', async (args) => {
+    const webview = getCurrentWebview();
+    if (webview) {
+      host.markDirty(webview, arg<{ filePath?: string; itemUid?: string; isDirty?: boolean }>(args));
+    }
+  });
   const reveal = async (args: unknown[]): Promise<null> => {
     if (typeof args[0] === 'string') { await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(args[0])); }
     return null;
@@ -209,6 +229,15 @@ export function registerShellHandlers(host: ShellHost): void {
       stateManager.broadcast('main:collection-removed', { collectionUid: uid });
       collectionWatcher.removeWatcher(root, uid);
       await openCollection(collectionWatcher, root);
+    }
+    // The loop only re-opens collections that are already open. When a git
+    // checkout deleted bruno.json from under the watcher, the collection was
+    // dropped from that list and nothing observes the directory anymore — so
+    // refresh would be a silent no-op. Pick the vault back up if it is a
+    // collection on disk again.
+    const vaultRoot = path.resolve(host.vault.root);
+    if (!collectionWatcher.hasWatcher(vaultRoot) && isCollectionRoot(vaultRoot)) {
+      await openCollection(collectionWatcher, vaultRoot, { dontSendDisplayErrors: true });
     }
   });
 

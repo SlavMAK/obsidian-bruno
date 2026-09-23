@@ -22,7 +22,7 @@ interface Host {
   prompt(opts: InputBoxOptions): Promise<string | undefined>;
   confirm(message: string, actions: string[]): Promise<string | undefined>;
   notice(message: string): void;
-  pickFromList<T extends QuickPickItem>(items: T[], placeholder?: string): Promise<T | undefined>;
+  pickFromList<T extends QuickPickItem>(items: T[], placeholder?: string, heading?: string): Promise<T | undefined>;
 }
 
 let host: Host | null = null;
@@ -259,24 +259,40 @@ class QuickPick<T extends QuickPickItem> {
   private accepted = new EventEmitter<void>();
   private hidden = new EventEmitter<void>();
   private changedSelection = new EventEmitter<T[]>();
+  /** Set by `hide()` so the show-loop knows the consumer finished vs. navigated. */
+  private hideRequested = false;
 
   readonly onDidAccept = this.accepted.event;
   readonly onDidHide = this.hidden.event;
   readonly onDidChangeSelection = this.changedSelection.event;
 
   show(): void {
-    void requireHost().pickFromList(this.items, this.placeholder).then(picked => {
-      if (picked) {
-        this.activeItems = [picked];
-        this.selectedItems = [picked];
-        this.changedSelection.fire([picked]);
-        this.accepted.fire();
-      }
-      this.hidden.fire();
-    });
+    // Obsidian has no persistent QuickPick list, so each step is a fresh modal.
+    // A "navigate" accept updates `items` without calling `hide()`; loop to show
+    // the refreshed list. A real selection (or Escape) calls `hide()` / cancels
+    // and ends the loop.
+    void this.run();
   }
 
-  hide(): void { this.hidden.fire(); }
+  private async run(): Promise<void> {
+    for (;;) {
+      const picked = await requireHost().pickFromList(this.items, this.placeholder, this.title);
+      if (!picked) { this.finishHidden(); return; }
+      this.activeItems = [picked];
+      this.selectedItems = [picked];
+      this.changedSelection.fire([picked]);
+      this.hideRequested = false;
+      this.accepted.fire();
+      if (this.hideRequested) { this.finishHidden(); return; }
+      // else: consumer updated items (folder navigation) → re-show
+    }
+  }
+
+  private finishHidden(): void {
+    this.hidden.fire();
+  }
+
+  hide(): void { this.hideRequested = true; }
   dispose(): void { this.accepted.dispose(); this.hidden.dispose(); this.changedSelection.dispose(); }
 }
 
