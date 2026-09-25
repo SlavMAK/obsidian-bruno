@@ -24,6 +24,8 @@ import { setExtensionContext as setCollectionSecurityContext } from '../extensio
 import { setExtensionContext as setUiStateContext } from '../extension/store/ui-state-snapshot';
 import { setExtensionContext as setCookiesContext, cookiesStore } from '../extension/store/cookies';
 import { setExtensionContext as setOAuth2Context } from '../extension/store/oauth2';
+import LastOpenedCollections from '../extension/store/last-opened-collections';
+import { defaultWorkspaceManager } from '../extension/store/default-workspace';
 
 import registerPreferencesIpc from '../extension/ipc/preferences';
 import registerCollectionIpc from '../extension/ipc/collection';
@@ -80,6 +82,7 @@ export default class BrunoPlugin extends Plugin {
     });
 
     this.initializeStores();
+    await this.normalizeVaultCollectionState();
     cookiesStore.initializeCookies();
     this.setupMessageBroadcaster();
     this.registerIpcHandlers();
@@ -201,6 +204,20 @@ export default class BrunoPlugin extends Plugin {
     }
   }
 
+  /** Keep persisted Bruno state local to this vault: one vault, one collection. */
+  private async normalizeVaultCollectionState(): Promise<void> {
+    const vaultRoot = nodePath.resolve(this.vaultRoot());
+    new LastOpenedCollections().update([vaultRoot]);
+
+    const initialized = await defaultWorkspaceManager.initializeDefaultWorkspace();
+    if (!initialized) { return; }
+
+    const config = defaultWorkspaceManager.getWorkspaceConfig(initialized.workspacePath);
+    if (!config) { return; }
+    config.collections = [{ name: this.app.vault.getName(), path: vaultRoot }];
+    await defaultWorkspaceManager.saveWorkspaceConfig(config, initialized.workspacePath);
+  }
+
   private setupMessageBroadcaster(): void {
     const broadcast = (channel: string, ...args: unknown[]) => stateManager.broadcast(channel, ...args);
     setMessageSender(broadcast);
@@ -213,7 +230,7 @@ export default class BrunoPlugin extends Plugin {
   private registerIpcHandlers(): void {
     registerCoreHandlers();
     registerPreferencesIpc();
-    registerCollectionIpc(collectionWatcher);
+    registerCollectionIpc(collectionWatcher, { collectionRoot: this.vaultRoot() });
     registerFilesystemIpc();
     registerGlobalEnvironmentsIpc();
     registerNetworkIpc();

@@ -161,11 +161,26 @@ const validatePathIsInsideCollection = (filePath: string): void => {
   }
 };
 
-const registerCollectionIpc = (watcher: CollectionWatcherInterface): void => {
+interface CollectionIpcOptions {
+  /** Obsidian treats the active vault as its one and only Bruno collection. */
+  collectionRoot?: string;
+}
+
+const registerCollectionIpc = (watcher: CollectionWatcherInterface, options: CollectionIpcOptions = {}): void => {
+  const collectionRoot = options.collectionRoot ? path.resolve(options.collectionRoot) : null;
+  const restrictToCollectionRoot = (collectionPaths: string[]): string[] => {
+    if (!collectionRoot) return collectionPaths;
+    return collectionPaths.some((candidate) => path.resolve(candidate) === collectionRoot)
+      ? [collectionRoot]
+      : [];
+  };
   registerHandler('renderer:create-collection', async (args) => {
     const [collectionName, collectionFolderNameInput, collectionLocation, options = {}] = args as [string, string, string, { format?: string }];
 
     try {
+      if (collectionRoot) {
+        throw new Error('The active Obsidian vault is the only collection');
+      }
       const format = options.format || 'yml';
       const collectionFolderName = sanitizeName(collectionFolderNameInput);
       const dirPath = path.join(collectionLocation, collectionFolderName);
@@ -239,6 +254,9 @@ const registerCollectionIpc = (watcher: CollectionWatcherInterface): void => {
     const [collectionName, collectionFolderNameInput, collectionLocation, previousPath] = args as [string, string, string, string];
 
     try {
+      if (collectionRoot) {
+        throw new Error('The active Obsidian vault is the only collection');
+      }
       const collectionFolderName = sanitizeName(collectionFolderNameInput);
       const dirPath = path.join(collectionLocation, collectionFolderName);
 
@@ -337,7 +355,11 @@ const registerCollectionIpc = (watcher: CollectionWatcherInterface): void => {
 
   registerHandler('renderer:open-collection', async () => {
     try {
-      await openCollectionDialog(watcher as Parameters<typeof openCollectionDialog>[0]);
+      if (collectionRoot) {
+        await openCollectionsByPathname(watcher as Parameters<typeof openCollectionsByPathname>[0], [collectionRoot]);
+      } else {
+        await openCollectionDialog(watcher as Parameters<typeof openCollectionDialog>[0]);
+      }
       return { success: true };
     } catch (error) {
       throw error;
@@ -348,7 +370,10 @@ const registerCollectionIpc = (watcher: CollectionWatcherInterface): void => {
     const [collectionPaths] = args as [string[]];
 
     try {
-      await openCollectionsByPathname(watcher as Parameters<typeof openCollectionsByPathname>[0], collectionPaths);
+      await openCollectionsByPathname(
+        watcher as Parameters<typeof openCollectionsByPathname>[0],
+        restrictToCollectionRoot(collectionPaths)
+      );
       return { success: true };
     } catch (error) {
       throw error;
@@ -1160,6 +1185,9 @@ const registerCollectionIpc = (watcher: CollectionWatcherInterface): void => {
     const [collection, collectionLocation, format = 'yml'] = args as [any, string, string];
 
     try {
+      if (collectionRoot) {
+        throw new Error('The active Obsidian vault is the only collection');
+      }
       const collectionName = collection.name || 'Imported Collection';
       const collectionFolderName = sanitizeName(collectionName);
       const dirPath = path.join(collectionLocation, collectionFolderName);
@@ -1409,6 +1437,9 @@ const registerCollectionIpc = (watcher: CollectionWatcherInterface): void => {
     const [zipFilePath, collectionLocation] = args as [string, string];
 
     try {
+      if (collectionRoot) {
+        throw new Error('The active Obsidian vault is the only collection');
+      }
       if (!fs.existsSync(zipFilePath)) {
         throw new Error('ZIP file does not exist');
       }
@@ -2002,7 +2033,9 @@ get {
   registerHandler('renderer:add-last-opened-collection', async (args) => {
     const [collectionPath] = args as [string];
     try {
-      lastOpenedCollections.add(collectionPath);
+      if (!collectionRoot || path.resolve(collectionPath) === collectionRoot) {
+        lastOpenedCollections.add(collectionPath);
+      }
       return { success: true };
     } catch (error) {
       console.error('[Collection IPC] Error adding to last opened collections:', error);
@@ -2023,7 +2056,7 @@ get {
 
   registerHandler('renderer:get-last-opened-collections', async () => {
     try {
-      const collections = lastOpenedCollections.getAll();
+      const collections = collectionRoot ? [collectionRoot] : lastOpenedCollections.getAll();
       const validCollections = collections.filter((collectionPath) => {
         try {
           return fs.existsSync(collectionPath) && isDirectory(collectionPath);
@@ -2082,7 +2115,7 @@ get {
     collectionsInitialized = true;
 
     try {
-      const collectionPaths = lastOpenedCollections.getAll();
+      const collectionPaths = collectionRoot ? [collectionRoot] : lastOpenedCollections.getAll();
       const validPaths: string[] = [];
 
       for (const collectionPath of collectionPaths) {
