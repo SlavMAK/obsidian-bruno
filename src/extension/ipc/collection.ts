@@ -89,6 +89,11 @@ let activeSidebarItemUid: string | null = null;
 
 // Tell the sidebar which item (request/folder/collection) is open in the active
 // editor, so it can highlight the matching row. Pass null to clear.
+/** What a sidebar that has only just loaded should highlight. */
+export function currentSidebarActiveItem(): string | null {
+  return activeSidebarItemUid;
+}
+
 export function notifyActiveItemToSidebar(itemUid: string | null): void {
   activeSidebarItemUid = itemUid;
   const sidebar = sidebarWebviewGetter?.();

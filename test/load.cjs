@@ -19,7 +19,7 @@ Module._resolveFilename = function (request, ...rest) {
 class Stub {}
 const stub = (exports) => ({ id: 'stub', filename: 'stub', loaded: true, exports });
 require.cache['obsidian-stub'] = stub({
-  Plugin: Stub, ItemView: Stub, Modal: Stub, SuggestModal: Stub,
+  Plugin: Stub, ItemView: Stub, FileView: Stub, Modal: Stub, SuggestModal: Stub,
   Setting: Stub, Notice: Stub, TFile: Stub, WorkspaceLeaf: Stub, addIcon() {}
 });
 require.cache['electron-stub'] = stub({ shell: {}, remote: { dialog: {} } });

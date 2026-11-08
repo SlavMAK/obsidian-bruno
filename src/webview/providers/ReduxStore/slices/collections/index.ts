@@ -9,6 +9,7 @@ import {
   findCollectionByPathname,
   findItemInCollection,
   findItemInCollectionByPathname,
+  findParentItemInCollection,
   findEnvironmentInCollection,
   isItemAFolder,
   isItemARequest,
@@ -446,6 +447,20 @@ export const collectionsSlice = createSlice({
       const collection = findCollectionByUid(state.collections, action.payload);
       if (collection) {
         collection.collapsed = !collection.collapsed;
+      }
+    },
+
+    /** Expand the collection and every folder above `itemUid` so the sidebar can show it. */
+    expandToItem: (state, action: PayloadAction<{ itemUid: UID }>) => {
+      for (const collection of state.collections) {
+        if (!findItemInCollection(collection, action.payload.itemUid)) { continue; }
+        collection.collapsed = false;
+        let parent = findParentItemInCollection(collection, action.payload.itemUid);
+        while (parent) {
+          parent.collapsed = false;
+          parent = findParentItemInCollection(collection, parent.uid);
+        }
+        return;
       }
     },
 
@@ -3181,6 +3196,7 @@ export const collectionsSlice = createSlice({
 
 export const {
   createCollection,
+  expandToItem,
   collapseFullCollection,
   updateCollectionMountStatus,
   updateCollectionLoadingState,

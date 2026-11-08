@@ -1,5 +1,7 @@
-import { useState, useMemo, useEffect } from 'react';
-import { useSelector } from 'react-redux';
+import { useState, useMemo, useEffect, useRef } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import { expandToItem } from 'providers/ReduxStore/slices/collections';
+import { findItemInCollection } from 'utils/collections';
 import styled from 'styled-components';
 import {
   IconWorld,
@@ -130,6 +132,19 @@ const VSSidebar = () => {
   const [isInitializing, setIsInitializing] = useState(true);
 
   const { collections } = useSelector((state: any) => state.collections);
+  const activeTabUid = useSelector((state: any) => state.tabs.activeTabUid) as string | null;
+  const dispatch = useDispatch();
+
+  // Open the tree down to the item active in the editor (the item scrolls itself into view once rendered).
+  // Each item is revealed once, so a folder the user collapses afterwards stays collapsed; an item that
+  // is not loaded yet is retried when its collection arrives.
+  const revealedUid = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeTabUid || revealedUid.current === activeTabUid) { return; }
+    if (!(collections || []).some((c: any) => findItemInCollection(c, activeTabUid))) { return; }
+    revealedUid.current = activeTabUid;
+    dispatch(expandToItem({ itemUid: activeTabUid }));
+  }, [activeTabUid, collections, dispatch]);
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;

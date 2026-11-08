@@ -1,12 +1,12 @@
-import { FileSystemAdapter, Notice, Plugin, WorkspaceLeaf, debounce, normalizePath } from 'obsidian';
+import { FileSystemAdapter, Notice, Plugin, TFile, WorkspaceLeaf, debounce, normalizePath } from 'obsidian';
 import * as nodePath from 'path';
 import { pathToFileURL } from 'url';
 import axios from 'axios';
 
 import { setHost, Uri, dispatchUri, window as vscodeWindow, type InputBoxOptions, type QuickPickItem, type ExtensionContext } from './vscode-shim';
 import { PromptModal, ConfirmModal, PickModal } from './modals';
-import { BrunoView, SIDEBAR_VIEW_TYPE, EDITOR_VIEW_TYPE, type ViewMode } from './view';
-import { registerShellHandlers, viewKey, type ViewData } from './shell';
+import { BrunoView, BruFileView, SIDEBAR_VIEW_TYPE, EDITOR_VIEW_TYPE, BRU_FILE_VIEW_TYPE, type ViewMode } from './view';
+import { registerShellHandlers, viewKey, viewDataForFile, type ViewData } from './shell';
 import { initLog, disposeLog, logPath } from './log';
 import { ensureWebviewAssets } from './webview-assets';
 
@@ -96,6 +96,8 @@ export default class BrunoPlugin extends Plugin {
 
     this.registerView(SIDEBAR_VIEW_TYPE, (leaf: WorkspaceLeaf) => new BrunoView(leaf, this, 'sidebar'));
     this.registerView(EDITOR_VIEW_TYPE, (leaf: WorkspaceLeaf) => new BrunoView(leaf, this, 'editor'));
+    this.registerView(BRU_FILE_VIEW_TYPE, (leaf: WorkspaceLeaf) => new BruFileView(leaf, this));
+    this.registerExtensions(['bru'], BRU_FILE_VIEW_TYPE);
     registerShellHandlers({
       openView: v => this.openView(v),
       closeView: w => this.closeView(w),
@@ -280,6 +282,26 @@ export default class BrunoPlugin extends Plugin {
       await leaf.setViewState({ type: EDITOR_VIEW_TYPE, active: true, state: { viewData } });
     }
     await this.app.workspace.revealLeaf(leaf);
+  }
+
+  /**
+   * A `.bru` clicked in Obsidian's file explorer: show it in a Bruno editor in
+   * that same leaf and switch the left panel to the Bruno collections tree.
+   */
+  async openFileFromExplorer(file: TFile, fileView: BruFileView): Promise<void> {
+    const viewData = viewDataForFile(nodePath.join(this.vaultRoot(), file.path));
+    if (!viewData) { fileView.showNotInCollection(file); return; }
+    const existing = this.editorViews().find(v => v.viewData && viewKey(v.viewData) === viewKey(viewData));
+    let editorLeaf = fileView.leaf;
+    if (existing) {
+      fileView.leaf.detach();
+      editorLeaf = existing.leaf;
+    } else {
+      await editorLeaf.setViewState({ type: EDITOR_VIEW_TYPE, active: true, state: { viewData } });
+    }
+    await this.activateSidebar();
+    // Revealing the sidebar may focus it; give focus back to the request (this also re-highlights it in the tree).
+    this.app.workspace.setActiveLeaf(editorLeaf, { focus: true });
   }
 
   closeView(webview: unknown): void {

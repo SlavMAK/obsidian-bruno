@@ -78,3 +78,9 @@
   background-color: var(--yellow, #e5c07b);
   box-shadow: 0 0 0 1.5px var(--tab-background, var(--background-primary));
 }
+
+/* folder.bru holds folder settings, not a request: keep it out of Obsidian's file explorer. */
+.nav-file:has(> .nav-file-title[data-path$="/folder.bru"]),
+.nav-file:has(> .nav-file-title[data-path="folder.bru"]) {
+  display: none;
+}

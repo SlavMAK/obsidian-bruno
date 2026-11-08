@@ -33,6 +33,7 @@ await esbuild.build({
           contents: `module.exports = {
             FileSystemAdapter: class {},
             ItemView: class { constructor(leaf) { this.leaf = leaf; } async setState() {} },
+            FileView: class { constructor(leaf) { this.leaf = leaf; } },
           };`
         }));
      }

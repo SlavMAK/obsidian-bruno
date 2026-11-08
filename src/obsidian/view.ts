@@ -1,6 +1,7 @@
-import { ItemView, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
+import { FileView, ItemView, TFile, WorkspaceLeaf, type ViewStateResult } from 'obsidian';
 import { handleInvoke, hasHandler, setCurrentWebview, clearCurrentWebview } from '../extension/ipc/handlers';
 import { stateManager } from '../extension/webview/state-manager';
+import { currentSidebarActiveItem } from '../extension/ipc/collection';
 import { applyTheme } from './theme';
 import { loadCollectionInto, viewTitle, closeTransient, hasTransientItem, type ViewData } from './shell';
 import { log, attachWebviewLogging } from './log';
@@ -8,6 +9,7 @@ import type BrunoPlugin from './main';
 
 export const SIDEBAR_VIEW_TYPE = 'bruno-sidebar';
 export const EDITOR_VIEW_TYPE = 'bruno-editor';
+export const BRU_FILE_VIEW_TYPE = 'bruno-file';
 export type ViewMode = 'sidebar' | 'editor';
 
 interface IpcMessage {
@@ -161,6 +163,9 @@ export class BrunoView extends ItemView {
     log('info', 'view', `renderer ready (${this.mode})`, this.viewData);
     if (this.mode === 'sidebar') {
       this.send('sidebar:ready');
+      // The editor that became active before this sidebar existed already notified nobody.
+      const activeItem = currentSidebarActiveItem();
+      if (activeItem) { this.send('main:set-active-item', activeItem); }
       return;
     }
     this.applyViewData();
@@ -218,5 +223,29 @@ export class BrunoView extends ItemView {
       return;
     }
     log('warn', 'ipc', 'unhandled send channel', channel, args);
+  }
+}
+
+/**
+ * Obsidian's file explorer lists only registered extensions. Registering `.bru`
+ * for this view makes requests visible there; a click hands the file over to a
+ * `bruno-editor` leaf (the same one the sidebar opens).
+ */
+export class BruFileView extends FileView {
+  constructor(leaf: WorkspaceLeaf, private plugin: BrunoPlugin) {
+    super(leaf);
+  }
+
+  getViewType(): string { return BRU_FILE_VIEW_TYPE; }
+  getIcon(): string { return 'send'; }
+
+  async onLoadFile(file: TFile): Promise<void> {
+    // Swapping the leaf's view from inside its own load would re-enter setViewState.
+    window.setTimeout((): void => { void this.plugin.openFileFromExplorer(file, this); }, 0);
+  }
+
+  showNotInCollection(file: TFile): void {
+    this.contentEl.empty();
+    this.contentEl.createEl('p', { text: `${file.path} is not inside a Bruno collection (no bruno.json above it).` });
   }
 }
