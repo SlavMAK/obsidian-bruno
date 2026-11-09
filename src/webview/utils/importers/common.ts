@@ -24,9 +24,19 @@ export const updateUidsInCollection = (_collection: any) => {
 
   collection.uid = uuid();
 
+  // Collection/folder roots carry uid-bearing rows too, and the schema requires them.
+  const updateRootUids = (root: any) => {
+    each(get(root, 'request.headers'), (header) => (header.uid = uuid()));
+    each(get(root, 'request.params'), (param) => (param.uid = uuid()));
+    each(get(root, 'request.vars.req'), (v) => (v.uid = uuid()));
+    each(get(root, 'request.vars.res'), (v) => (v.uid = uuid()));
+  };
+  updateRootUids(collection.root);
+
   const updateItemUids = (items: any[] = []) => {
     each(items, (item) => {
       item.uid = uuid();
+      updateRootUids(item.root);
 
       each(get(item, 'request.headers'), (header) => (header.uid = uuid()));
       each(get(item, 'request.params'), (param) => (param.uid = uuid()));

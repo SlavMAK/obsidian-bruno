@@ -27,7 +27,8 @@
     "test:smoke": "node test/build-and-run.mjs",
     "test:load": "node test/load.cjs",
     "test:webview": "node test/webview-unpack.mjs",
-    "test": "npm run test:load && npm run test:webview && npm run test:smoke"
+    "test:unit": "vitest run",
+    "test": "npm run test:unit && npm run test:load && npm run test:webview && npm run test:smoke"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",

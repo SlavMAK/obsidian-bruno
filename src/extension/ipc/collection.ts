@@ -67,6 +67,7 @@ const {
 
 const {
   postmanToBruno: postmanToBrunoConverter,
+  brunoToPostman: brunoToPostmanConverter,
   openApiToBruno: openApiToBrunoConverter,
   insomniaToBruno: insomniaToBrunoConverter,
   wsdlToBruno: wsdlToBrunoConverter,
@@ -1342,6 +1343,48 @@ const registerCollectionIpc = (watcher: CollectionWatcherInterface, options: Col
       console.error('[Collection IPC] Error converting Postman to Bruno:', error);
       throw error;
     }
+  });
+
+  // Export runs here for the same reason: the webview's @usebruno/converters is
+  // a browser stub, while the real converter (with script translation) is Node-only.
+  registerHandler('renderer:convert-bruno-to-postman', async (args) => {
+    const [brunoCollection] = args as [any];
+    try {
+      return brunoToPostmanConverter(_.cloneDeep(brunoCollection));
+    } catch (error) {
+      console.error('[Collection IPC] Error converting Bruno to Postman:', error);
+      throw error;
+    }
+  });
+
+  // The sidebar tree holds only request metadata (see collection-watcher), so an
+  // export must fully parse every request first. Returns { [pathname]: parsed }
+  // and leaves the Redux tree untouched; unreadable files are reported, not thrown.
+  registerHandler('renderer:load-requests-for-export', async (args) => {
+    const [{ pathnames }] = args as [{ pathnames: string[] }];
+    const loaded: Record<string, unknown> = {};
+    const errors: Record<string, string> = {};
+
+    for (const pathname of pathnames || []) {
+      try {
+        if (!hasRequestExtension(pathname)) {
+          continue;
+        }
+        const collectionPath = findCollectionPathByItemPath(pathname);
+        if (!collectionPath) {
+          throw new Error('Path is outside of any open collection');
+        }
+        const format = getCollectionFormat(collectionPath);
+        const content = fs.readFileSync(pathname, 'utf8');
+        const fullData = await parseRequest(content, { format });
+        hydrateRequestWithUuid(fullData, pathname);
+        loaded[pathname] = fullData;
+      } catch (error) {
+        errors[pathname] = (error as Error)?.message || String(error);
+      }
+    }
+
+    return { loaded, errors };
   });
 
   registerHandler('renderer:convert-openapi-to-bruno', async (args) => {

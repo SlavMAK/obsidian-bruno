@@ -224,6 +224,7 @@ export const transformCollectionToSaveToExportAsFile = (collection: any, options
         name: param.name,
         value: param.value,
         description: param.description,
+        contentType: param.contentType,
         enabled: param.enabled
       };
     });
@@ -474,6 +475,14 @@ export const transformCollectionToSaveToExportAsFile = (collection: any, options
               username: get(si.request, 'auth.wsse.username', ''),
               password: get(si.request, 'auth.wsse.password', '')
             };
+            break;
+          // Copied whole: unlike the modes above they have no defaults to normalise,
+          // and leaving them out of this switch dropped their credentials on export.
+          case 'oauth1':
+            di.request.auth.oauth1 = cloneDeep(get(si.request, 'auth.oauth1', {}));
+            break;
+          case 'akamai-edgegrid':
+            di.request.auth.akamaiEdgegrid = cloneDeep(get(si.request, 'auth.akamaiEdgegrid', {}));
             break;
           default:
             break;

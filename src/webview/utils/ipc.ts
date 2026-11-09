@@ -150,7 +150,11 @@ const INTERACTIVE_INVOKE_CHANNELS = new Set<string>([
   'renderer:browse-directory',
   'renderer:import-collection',
   'renderer:open-workspace-dialog',
-  'renderer:load-gql-schema-file'
+  'renderer:load-gql-schema-file',
+  // Waits on a save dialog; timing out would report a failed export for a file that still gets written.
+  'sidebar:save-file',
+  // Parses every request of the collection; large collections can exceed the default timeout.
+  'renderer:load-requests-for-export'
 ]);
 
 const DEFAULT_INVOKE_TIMEOUT_MS = 30000;

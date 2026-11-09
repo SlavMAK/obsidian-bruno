@@ -323,6 +323,46 @@ async function testDirtyTabIndicator(): Promise<void> {
   console.log('ok  unsaved drafts mark their tab');
 }
 
+/**
+ * Export runs on the extension side: requests are fully parsed from disk (the
+ * sidebar tree only has metadata) and Postman conversion uses the real
+ * converter, including bru→pm script translation.
+ */
+async function testExportHandlers(): Promise<void> {
+  const root = path.join(tmp, 'export-me');
+  fs.mkdirSync(path.join(root, 'Users'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'bruno.json'), JSON.stringify({ version: '1', name: 'export-me', type: 'collection' }));
+  const req = path.join(root, 'Users', 'Get user.bru');
+  fs.writeFileSync(req, [
+    'meta {', '  name: Get user', '  type: http', '  seq: 1', '}', '',
+    'get {', '  url: {{baseUrl}}/users/1', '  body: none', '  auth: none', '}', '',
+    'headers {', '  Accept: application/json', '}', '',
+    'script:pre-request {', '  bru.setVar("a", 1);', '}', ''
+  ].join('\n'));
+  registerCollectionIpc(collectionWatcher);
+  collectionWatcher.addWatcher(root, generateUidBasedOnHash(root));
+  try {
+    const { loaded, errors } = await handleInvoke('renderer:load-requests-for-export', [{
+      pathnames: [req, path.join(tmp, 'outside.bru')]
+    }]) as { loaded: Record<string, any>; errors: Record<string, string> };
+    assert.strictEqual(loaded[req].request.url, '{{baseUrl}}/users/1');
+    assert.strictEqual(loaded[req].request.headers[0].name, 'Accept');
+    assert.ok(errors[path.join(tmp, 'outside.bru')], 'files outside open collections must be refused');
+
+    const postman = await handleInvoke('renderer:convert-bruno-to-postman', [{
+      name: 'export-me',
+      items: [{ type: 'folder', name: 'Users', items: [{ ...loaded[req], type: 'http-request' }] }]
+    }]) as any;
+    assert.strictEqual(postman.info.schema, 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json');
+    const item = postman.item[0].item[0];
+    assert.strictEqual(item.request.url.raw, '{{baseUrl}}/users/1');
+    assert.ok(item.event[0].script.exec.join('\n').includes('pm.'), 'pre-request script must be translated to pm.*');
+  } finally {
+    collectionWatcher.removeWatcher(root, generateUidBasedOnHash(root));
+  }
+  console.log('ok  export handlers load full requests and convert to Postman');
+}
+
 async function main(): Promise<void> {
   setPreferencesContext(context as never);
   setCookiesContext(context as never);
@@ -341,6 +381,7 @@ async function main(): Promise<void> {
   await testRefreshRecoversTheVault();
   await testRendererReadyRestoresVanishedCollection();
   await testDirtyTabIndicator();
+  await testExportHandlers();
   console.log('smoke: all checks passed');
 }
 

@@ -3,11 +3,16 @@ import { useSelector } from 'react-redux';
 import styled from 'styled-components';
 import { IconUpload, IconLoader2, IconAlertTriangle, IconShare } from '@tabler/icons';
 import Bruno from 'components/Bruno';
-import OpenCollectionIcon from 'components/Icons/OpenCollectionIcon';
-import { cloneDeep, each, get } from 'lodash';
 import { findCollectionByUid, areItemsLoading } from 'utils/collections/index';
 import { ipcRenderer } from 'utils/ipc';
 import toast from 'react-hot-toast';
+import {
+  loadFullCollection,
+  buildBrunoExport,
+  buildPostmanExport,
+  getPostmanUnsupportedTypes,
+  getExportFileName
+} from 'utils/exporters/collection-export';
 
 const StyledWrapper = styled.div`
   width: 100%;
@@ -149,99 +154,6 @@ const StyledWrapper = styled.div`
   }
 `;
 
-const deleteUidsInItems = (items: any[]) => {
-  each(items, (item) => {
-    delete item.uid;
-
-    if (['http-request', 'graphql-request', 'grpc-request'].includes(item.type)) {
-      each(get(item, 'request.headers'), (header: any) => delete header.uid);
-      each(get(item, 'request.params'), (param: any) => delete param.uid);
-      each(get(item, 'request.vars.req'), (v: any) => delete v.uid);
-      each(get(item, 'request.vars.res'), (v: any) => delete v.uid);
-      each(get(item, 'request.vars.assertions'), (a: any) => delete a.uid);
-      each(get(item, 'request.body.multipartForm'), (param: any) => delete param.uid);
-      each(get(item, 'request.body.formUrlEncoded'), (param: any) => delete param.uid);
-      each(get(item, 'request.body.file'), (param: any) => delete param.uid);
-
-      each(get(item, 'examples'), (example: any) => {
-        delete example.uid;
-        delete example.itemUid;
-        each(get(example, 'request.headers'), (header: any) => delete header.uid);
-        each(get(example, 'request.params'), (param: any) => delete param.uid);
-        each(get(example, 'request.body.multipartForm'), (param: any) => delete param.uid);
-        each(get(example, 'request.body.formUrlEncoded'), (param: any) => delete param.uid);
-        each(get(example, 'request.body.file'), (param: any) => delete param.uid);
-        each(get(example, 'response.headers'), (header: any) => delete header.uid);
-      });
-    }
-
-    if (item.items && item.items.length) {
-      deleteUidsInItems(item.items);
-    }
-  });
-};
-
-const transformItem = (items: any[] = []) => {
-  each(items, (item) => {
-    if (['http-request', 'graphql-request', 'grpc-request', 'ws-request'].includes(item.type)) {
-      if (item.type === 'graphql-request') item.type = 'graphql';
-      if (item.type === 'http-request') item.type = 'http';
-      if (item.type === 'grpc-request') item.type = 'grpc';
-      if (item.type === 'ws-request') item.type = 'ws';
-    }
-
-    each(get(item, 'examples'), (example: any) => {
-      if (example.type === 'graphql-request') example.type = 'graphql';
-      else if (example.type === 'http-request') example.type = 'http';
-      else if (example.type === 'grpc-request') example.type = 'grpc';
-      else if (example.type === 'ws-request') example.type = 'ws';
-    });
-
-    if (item.items && item.items.length) {
-      transformItem(item.items);
-    }
-  });
-};
-
-const deleteUidsInEnvs = (envs: any[]) => {
-  each(envs, (env) => {
-    delete env.uid;
-    each(env.variables, (variable: any) => delete variable.uid);
-  });
-};
-
-const deleteSecretsInEnvs = (envs: any[]) => {
-  each(envs, (env) => {
-    each(env.variables, (variable: any) => {
-      if (variable.secret) variable.value = '';
-    });
-  });
-};
-
-const prepareCollectionForExport = (collection: any) => {
-  const collectionCopy = cloneDeep(collection);
-
-  delete collectionCopy.uid;
-  delete collectionCopy.processEnvVariables;
-  delete collectionCopy.pathname;
-  delete collectionCopy.collapsed;
-  delete collectionCopy.mountStatus;
-
-  if (collectionCopy.items) {
-    deleteUidsInItems(collectionCopy.items);
-    transformItem(collectionCopy.items);
-  }
-  if (collectionCopy.environments) {
-    deleteUidsInEnvs(collectionCopy.environments);
-    deleteSecretsInEnvs(collectionCopy.environments);
-  }
-
-  collectionCopy.exportedAt = new Date().toISOString();
-  collectionCopy.exportedUsing = 'Bruno VS Code Extension';
-
-  return collectionCopy;
-};
-
 interface ExportCollectionViewProps {
   collection: any;
 }
@@ -251,78 +163,56 @@ const ExportCollectionView: React.FC<ExportCollectionViewProps> = ({ collection 
   const isCollectionLoading = areItemsLoading(collection);
 
   const hasNonExportableRequestTypes = useMemo(() => {
-    const types = new Set<string>();
-    const checkItem = (item: any): boolean => {
-      if (item.type === 'grpc-request') {
-        types.add('gRPC');
-        return true;
-      }
-      if (item.type === 'ws-request') {
-        types.add('WebSocket');
-        return true;
-      }
-      if (item.items) {
-        return item.items.some(checkItem);
-      }
-      return false;
-    };
-    return {
-      has: collection?.items?.filter(checkItem).length || false,
-      types: [...types]
-    };
+    const types = getPostmanUnsupportedTypes(collection);
+    return { has: types.length > 0, types };
   }, [collection]);
 
-  const handleExportBrunoCollection = async () => {
+  const runExport = async (build: () => Promise<{ data: any; warnings?: string[] }>, suffix: string, successMessage: string) => {
     if (isCollectionLoading || isExporting) return;
 
     setIsExporting(true);
     try {
-      const exportData = prepareCollectionForExport(collection);
-      const content = JSON.stringify(exportData, null, 2);
+      const { data, warnings = [] } = await build();
+      const content = JSON.stringify(data, null, 2);
 
       const result = await ipcRenderer.invoke('sidebar:save-file', {
-        defaultFileName: `${collection.name}.json`,
+        defaultFileName: getExportFileName(collection.name, suffix),
         content,
         filters: [{ name: 'JSON Files', extensions: ['json'] }]
       });
 
       if (result) {
-        toast.success('Collection exported successfully');
+        toast.success(successMessage);
+        if (warnings.length) {
+          toast(warnings.join('\n'), { icon: '⚠️', duration: 10000 });
+        }
         ipcRenderer.send('export-collection:close');
       }
     } catch (error) {
       console.error('Error exporting collection:', error);
-      toast.error('Failed to export collection');
+      toast.error(`Failed to export collection: ${(error as Error)?.message || error}`);
     } finally {
       setIsExporting(false);
     }
   };
 
-  const handleExportPostmanCollection = async () => {
-    if (isCollectionLoading || isExporting) return;
+  const handleExportBrunoCollection = () =>
+    runExport(
+      async () => ({ data: buildBrunoExport(await loadFullCollection(collection, ipcRenderer.invoke)) }),
+      '',
+      'Collection exported successfully'
+    );
 
-    setIsExporting(true);
-    try {
-      const exportData = prepareCollectionForExport(collection);
-      const content = JSON.stringify(exportData, null, 2);
-
-      const result = await ipcRenderer.invoke('sidebar:save-file', {
-        defaultFileName: `${collection.name}_postman.json`,
-        content,
-        filters: [{ name: 'JSON Files', extensions: ['json'] }]
-      });
-
-      if (result) {
-        toast.success('Collection exported in Postman format');
-        ipcRenderer.send('export-collection:close');
-      }
-    } catch (error) {
-      console.error('Error exporting collection:', error);
-      toast.error('Failed to export collection');
-    } finally {
-      setIsExporting(false);
-    }
-  };
+  const handleExportPostmanCollection = () =>
+    runExport(
+      async () => {
+        const full = await loadFullCollection(collection, ipcRenderer.invoke);
+        const { collection: data, warnings } = await buildPostmanExport(full, ipcRenderer.invoke);
+        return { data, warnings };
+      },
+      '_postman',
+      'Collection exported in Postman format'
+    );
 
   const handleCancel = () => {
     ipcRenderer.send('export-collection:close');
